@@ -10,7 +10,7 @@
 
 #define WHEELBASE        14.9225                // cm
 #define BASERADIUS       7.46125                // cm
-#define WHEELRADIUS      3.65125                // cm
+#define WHEELRADIUS      3.4925                 // cm (was 3.65125)
 
 #define PIVOT_TURN true                         // pivot turn instead of PID mode for large heading corrections
 #define PIVOT_TURN_SPEED 30
@@ -20,8 +20,12 @@
 #define CAP_ANGULAR_VELOCITY_SIGNAL true        // cap angular velocity correction allowed in PID mode
 #define ANGULAR_VELOCITY_SIGNAL_LIMIT 0.2
 
-#define WAYPOINT_PROXIMITY_APPROACHING 10.0
-#define WAYPOINT_PROXIMITY_REACHED 1.5
+#define ABORT_WAYPOINT_AFTER_DISTANCE_INCREASES true
+#define DISTANCE_INCREASE_ITERATION_THRESHOLD 1
+#define DISTANCE_INCREASE_DRIFT_FROM_INITIAL_VECTOR_THRESHOLD 0.25
+
+#define WAYPOINT_PROXIMITY_APPROACHING 5.0      // was 10.0
+#define WAYPOINT_PROXIMITY_REACHED 1.0          // was 3.0
 #define POST_WAYPOINT_SLEEP_MS 1000
 
 #define PERIODIC_REFERENCE_HEADING_RESET false  // should we periodically recalculate required reference heading during waypoint finding?
@@ -203,7 +207,7 @@ void goToWaypoint(double x, double y)
         double headingErrorRaw = referencePose.heading - currentPose.heading;
         headingError = atan2(sin(headingErrorRaw), cos(headingErrorRaw));
 
-        snprintf_P(report, sizeof(report), PSTR("c[%s] r[%s] er[%s] e[%s]"), ftoa(floatBuf1, currentPose.heading), ftoa(floatBuf2, referencePose.heading), ftoa(floatBuf3, headingErrorRaw), ftoa(floatBuf4, headingError));
+        snprintf_P(report, sizeof(report), PSTR("head curr[%s] ref[%s] err[%s] (raw %s)"), ftoa(floatBuf1, currentPose.heading), ftoa(floatBuf2, referencePose.heading), ftoa(floatBuf3, headingError), ftoa(floatBuf4, headingErrorRaw));
         Serial.println(report);
 
         if (PIVOT_TURN && ((headingError > ((2*M_PI) / PIVOT_TURN_THRESHOLD)) || (headingError < -((2*M_PI) / PIVOT_TURN_THRESHOLD))))
@@ -230,7 +234,7 @@ void goToWaypoint(double x, double y)
             targetVectorMagnitudeInitial = targetVectorMagnitude;        
         }
 
-        snprintf_P(report, sizeof(report), PSTR("   now (%s, %s, head [%s, e: %s]) distTgt[%s]"), ftoa(floatBuf1, currentPose.x), ftoa(floatBuf2, currentPose.y), ftoa(floatBuf3, currentPose.heading), ftoa(floatBuf4, headingError), ftoa(floatBuf5, targetVectorMagnitude));    
+        snprintf_P(report, sizeof(report), PSTR("   now (%s, %s) head [%s] err[%s] distTgt[%s]"), ftoa(floatBuf1, currentPose.x), ftoa(floatBuf2, currentPose.y), ftoa(floatBuf3, currentPose.heading), ftoa(floatBuf4, headingError), ftoa(floatBuf5, targetVectorMagnitude));    
         Serial.println(report);      
 
         // Give up out of out-of-control situations
@@ -238,6 +242,8 @@ void goToWaypoint(double x, double y)
         {
             if (targetVectorMagnitude >= targetVectorMagnitudeLast)
             {
+                bool abortWaypoint = false;
+                
                 if (consecutiveIncreasingDistances == 0)
                 {
                     targetVectorMagnitudeAtStartOfDrift = targetVectorMagnitude;
@@ -245,9 +251,23 @@ void goToWaypoint(double x, double y)
 
                 consecutiveIncreasingDistances++;
 
-                double distanceCoveredSinceStartOfDrift = targetVectorMagnitude - targetVectorMagnitudeAtStartOfDrift;
-                if (distanceCoveredSinceStartOfDrift >= (0.25 * targetVectorMagnitudeInitial))
+                if (ABORT_WAYPOINT_AFTER_DISTANCE_INCREASES && consecutiveIncreasingDistances >= DISTANCE_INCREASE_ITERATION_THRESHOLD)
                 {
+                    abortWaypoint = true;
+                }
+                else
+                {
+                    double distanceCoveredSinceStartOfDrift = targetVectorMagnitude - targetVectorMagnitudeAtStartOfDrift;
+                    if (distanceCoveredSinceStartOfDrift >= (DISTANCE_INCREASE_DRIFT_FROM_INITIAL_VECTOR_THRESHOLD * targetVectorMagnitudeInitial))
+                    {
+                        abortWaypoint = true;
+                    }
+                }
+
+                if (abortWaypoint)
+                {
+                    motors.setSpeeds(0, 0);
+
                     snprintf_P(report, sizeof(report), PSTR("   !!! ABORT: DISTANCE TO TARGET INCREASED"));    
                     Serial.println(report);      
 
@@ -282,7 +302,7 @@ void goToWaypoint(double x, double y)
 
         if (targetVectorMagnitude <= WAYPOINT_PROXIMITY_REACHED)
         {
-            snprintf_P(report, sizeof(report), PSTR("--- WAYPOINT REACHED ---"));    
+            snprintf_P(report, sizeof(report), PSTR("   >>> WAYPOINT REACHED <<<"));    
             Serial.println(report);      
             break;
         }
@@ -306,10 +326,14 @@ void goToWaypoint(double x, double y)
             if (u > ANGULAR_VELOCITY_SIGNAL_LIMIT)
             {
                 u = ANGULAR_VELOCITY_SIGNAL_LIMIT;
+                snprintf_P(report, sizeof(report), PSTR("   !!! Capped angular velocity signal"));    
+                Serial.println(report);      
             }
             else if (u < (-1.0 * ANGULAR_VELOCITY_SIGNAL_LIMIT))
             {
                 u = -1.0 * ANGULAR_VELOCITY_SIGNAL_LIMIT;
+                snprintf_P(report, sizeof(report), PSTR("   !!! Capped angular velocity signal"));    
+                Serial.println(report);                      
             }
         }
 
@@ -456,6 +480,10 @@ void correctHeadingWithPivotTurn(double headingError)
     snprintf_P(report, sizeof(report), PSTR("   CORRECTING [%s] rad, spin arc length [%s] [%s]"), ftoa(floatBuf1, headingError), ftoa(floatBuf2, arcLength)); 
     Serial.println(report);      
     
+    encoders.getCountsAndResetLeft();
+    double spinDist = 0.0;
+    arcLength = fabs(arcLength);
+    
     if (headingError > 0)
     {
         motors.setSpeeds(-1 * PIVOT_TURN_SPEED, PIVOT_TURN_SPEED); 
@@ -465,19 +493,14 @@ void correctHeadingWithPivotTurn(double headingError)
         motors.setSpeeds(PIVOT_TURN_SPEED, -1 * PIVOT_TURN_SPEED);
     }
     
-    double spinDist = 0.0;
-    arcLength = fabs(arcLength);
-    
-    encoders.getCountsAndResetLeft();
-    
     while (spinDist < arcLength)
     {
-        int16_t counts          = encoders.getCountsLeft();
+        int16_t countsLeft = abs(encoders.getCountsLeft());
+        int16_t countsRight = abs(encoders.getCountsRight());
+        int16_t counts = (countsLeft + countsRight) / 2;
+        
         unsigned long absCounts = abs(counts);
-    
         spinDist = ((double)absCounts / COUNTS_PER_REVOLUTION) * (2*M_PI * WHEELRADIUS); 
-    
-        delay(2);
     }
     
     motors.setSpeeds(0, 0);
