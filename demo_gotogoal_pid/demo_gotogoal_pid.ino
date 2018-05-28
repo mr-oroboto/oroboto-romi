@@ -1,10 +1,13 @@
 #include <Romi32U4.h>
+#include <Wire.h>
+#include <LSM6.h>
+#include "QMC5883L.h"
 
 #define PID_PROPORTIONAL 0.90
 #define PID_INTEGRAL     0.0005
 #define PID_DERIVATIVE   0.00
 
-#define MAX_VELOCITY         2                  // cm/s
+#define MAX_VELOCITY         2                  // cm/s (known good max velocity is "2")
 #define VELOCITY_ON_APPROACH 1.0
 #define CORRECT_MOTOR_BIASES false              // left and right motor may have different input response curves, correct for them?
 
@@ -13,9 +16,9 @@
 #define WHEELRADIUS      3.4925                 // cm (was 3.65125)
 
 #define PIVOT_TURN true                         // pivot turn instead of PID mode for large heading corrections
-#define PIVOT_TURN_SPEED 30
+#define PIVOT_TURN_SPEED 30                     // known good speed is 30
 #define PIVOT_TURN_THRESHOLD 12.0               // use pivot if heading correction > 2*PI / PIVOT_TURN_THRESHOLD
-#define PIVOT_TURN_SLEEP_MS 500
+#define PIVOT_TURN_SLEEP_MS 200                 // known good sleep is 500
 
 #define CAP_ANGULAR_VELOCITY_SIGNAL true        // cap angular velocity correction allowed in PID mode
 #define ANGULAR_VELOCITY_SIGNAL_LIMIT 0.2
@@ -26,11 +29,14 @@
 
 #define WAYPOINT_PROXIMITY_APPROACHING 5.0      // was 10.0
 #define WAYPOINT_PROXIMITY_REACHED 1.0          // was 3.0
-#define POST_WAYPOINT_SLEEP_MS 1000
+#define POST_WAYPOINT_SLEEP_MS 300              // known good sleep is 1000
 
 #define PERIODIC_REFERENCE_HEADING_RESET false  // should we periodically recalculate required reference heading during waypoint finding?
 
 #define COUNTS_PER_REVOLUTION 1440.0            // number of encoder counts per wheel revolution (should be ~1440)
+
+#define USE_GYRO_FOR_HEADING true
+#define GYRODIGITS_TO_DPS 0.00875
 
 struct Pose {
   double        x;
@@ -42,6 +48,8 @@ struct Pose {
 Romi32U4Encoders  encoders;
 Romi32U4Buzzer    buzzer;
 Romi32U4Motors    motors;
+LSM6              imu;
+QMC5883L          compass;
 
 struct Pose currentPose;          // (believed) current position and heading
 struct Pose referencePose;        // pose of reference waypoint (heading is heading required from currentPose)
@@ -57,6 +65,14 @@ double distRightPrev;
 double distTotal;                 // total distance travelled in this waypoint segment
 double distTotalPrev;             // previous total distance travelled in this waypoint segment
 
+int16_t       gyroOffset = 0;           // average reading on gyro Z axis during calibration
+unsigned long gyroLastUpdateMicros = 0; // helps calculate dt for gyro readings (in microseconds)
+double        gyroAngle;
+double        gyroAngleRad;
+double        gyroAngleDifference = 0;
+double        magnetoAngle;
+double        magnetoAngleRad;
+
 char report[80];
 char floatBuf1[16], floatBuf2[16], floatBuf3[16], floatBuf4[16], floatBuf5[16], floatBuf6[16];
 
@@ -64,6 +80,7 @@ const char encoderErrorLeft[]  PROGMEM = "!<c2";
 const char encoderErrorRight[] PROGMEM = "!<e2";
 const char starting[] PROGMEM = "! L16 V8 gcdgcdgcdgcd";
 const char finished[] PROGMEM = "! L16 V8 cdefgab>cbagfedc";
+const char alarm[]  PROGMEM = "!<c2";
 
 double waypointsSquare[][2] = {
     {100.0, 0.0},
@@ -76,19 +93,58 @@ double waypointsLine[][2] = {
     {100.0, 0.0}
 };
 
-#define NUM_WAYPOINTS 4
-double (*waypoints)[2] = waypointsSquare;
+double waypointsRectangle[][2] = {
+    {-50.0, 50.0},
+    {50.0, 50.0},
+    {0.0, 100.0},
+    {0.0, 0.0}
+};
+
+double waypointsStar[][2] = {
+    {-40.0, 90.0},
+    {-80.0, 0.0},
+    {40.0, 60.0},
+    {-100.0, 60.0},
+    {0.0, 0.0}
+};
+
+double waypointsTriangles[][2] = {
+    {50.0, 50.0},
+    {100.0, 0.0},
+    {100.0, 100.0},
+    {50.0, 50.0},
+    {0.0, 100.0},
+    {0.0, 0.0}
+};
+
+#define NUM_WAYPOINTS 6
+double (*waypoints)[2] = waypointsTriangles;
+
+/*****************************************************************************************************
+ * Entrypoint
+ *****************************************************************************************************/
 
 void setup() 
 {
-    resetToOrigin();
+    Serial.begin(9600);
+    Wire.begin();
 
+    if (USE_GYRO_FOR_HEADING)
+    {
+//      calibrateMagnetometer();      // far less accurate than the gyro until we can use it for fusion
+        calibrateGyro();
+    }
+    
+    /* --------------------------------------------------------------------------------------------- */
+    
+    delay(2000);
     snprintf_P(report, sizeof(report), PSTR("************************ START ************************"));    
     Serial.println(report);      
     
     buzzer.playFromProgramSpace(starting);
     delay(2000);
-    
+
+    resetToOrigin();
     for (int i = 0; i < NUM_WAYPOINTS; i++)
     {
         goToWaypoint(waypoints[i][0], waypoints[i][1]);
@@ -103,7 +159,11 @@ void setup()
 void loop() 
 {
 }
- 
+
+/*****************************************************************************************************
+ * End entrypoint
+ *****************************************************************************************************/
+
 /**
  * Go to the specified waypoint from the current waypoint.
  */
@@ -177,6 +237,15 @@ void goToWaypoint(double x, double y)
 
         if (iteration != 0)
         {
+            //
+            // Update heading (using odometry and/or gyroscope if this isn't the first iteration of the waypoint (ie. we've actually travelled somewhere)
+            //
+
+            if (USE_GYRO_FOR_HEADING)
+            {
+               updateGyroscopeHeading();
+            }
+            
             distLeft  += ((double)countsLeft / COUNTS_PER_REVOLUTION)  * (2*M_PI * WHEELRADIUS);        // cm travelled by left wheel (total, note the increment)
             distRight += ((double)countsRight / COUNTS_PER_REVOLUTION) * (2*M_PI * WHEELRADIUS);        // cm travelled by right wheel (total, note the increment)
             distTotal = (distLeft + distRight) / 2.0;                                                   // cm travelled forward (total)
@@ -195,9 +264,14 @@ void goToWaypoint(double x, double y)
             // Update the heading as it has changed based on the distance travelled too
             currentPose.heading += ((distRightDelta - distLeftDelta) / WHEELBASE);
 
-            // Ensure our heading remains sane
-            currentPose.heading = atan2(sin(currentPose.heading), cos(currentPose.heading));
+            if (USE_GYRO_FOR_HEADING)
+            {
+                currentPose.heading = gyroAngleRad;
+            }
 
+            // Ensure our heading remains sane (between -pi and +pi)
+            currentPose.heading = atan2(sin(currentPose.heading), cos(currentPose.heading));
+            
             distTotalPrev = distTotal;
             distLeftPrev  = distLeft;
             distRightPrev = distRight;
@@ -207,16 +281,35 @@ void goToWaypoint(double x, double y)
         double headingErrorRaw = referencePose.heading - currentPose.heading;
         headingError = atan2(sin(headingErrorRaw), cos(headingErrorRaw));
 
-        snprintf_P(report, sizeof(report), PSTR("head curr[%s] ref[%s] err[%s] (raw %s)"), ftoa(floatBuf1, currentPose.heading), ftoa(floatBuf2, referencePose.heading), ftoa(floatBuf3, headingError), ftoa(floatBuf4, headingErrorRaw));
+        if (USE_GYRO_FOR_HEADING)
+        {
+            snprintf_P(report, sizeof(report), PSTR("head curr[%s] gyro[%s / %s deg] ref[%s] err[%s] (raw %s)"), ftoa(floatBuf1, currentPose.heading), ftoa(floatBuf2, gyroAngleRad), ftoa(floatBuf3, gyroAngle), ftoa(floatBuf4, referencePose.heading), ftoa(floatBuf5, headingError), ftoa(floatBuf6, headingErrorRaw));          
+        }
+        else
+        {
+            snprintf_P(report, sizeof(report), PSTR("head curr[%s] ref[%s] err[%s] (raw %s)"), ftoa(floatBuf1, currentPose.heading), ftoa(floatBuf2, referencePose.heading), ftoa(floatBuf3, headingError), ftoa(floatBuf4, headingErrorRaw));
+        }
         Serial.println(report);
 
         if (PIVOT_TURN && ((headingError > ((2*M_PI) / PIVOT_TURN_THRESHOLD)) || (headingError < -((2*M_PI) / PIVOT_TURN_THRESHOLD))))
         {
-            correctHeadingWithPivotTurn(headingError);
+            if (USE_GYRO_FOR_HEADING)
+            {
+                correctHeadingWithPivotTurnGyro(headingError);
+            }
+            else
+            {
+                correctHeadingWithPivotTurn(headingError);              
+            }
 
-            // @todo We SHOULD set the current heading based on the arc length ACTUALLY travelled rather than that requested (because we can overshoot)
-            currentPose.heading = referencePose.heading;
-            headingError = 0.0;
+            // If using gyroscope, assume we got to whatever heading it is currently measuring, rather than what we asked for
+            if ( ! USE_GYRO_FOR_HEADING)
+            {
+                // @todo We SHOULD set the current heading based on the arc length ACTUALLY travelled rather than that requested (because we can overshoot)
+                currentPose.heading = referencePose.heading;
+            }
+            
+            headingError = 0.0;   // @todo: if using the gyro we should update this for the current error NOW that we've spun via the gyro (and its newly reported heading)
 
             // Reset counters as if we'd never done this since last checking them
             encoders.getCountsAndResetLeft();
@@ -386,6 +479,9 @@ void resetToOrigin()
     referencePose.heading = 0.0;
     referencePose.timestamp = 0;
 
+    gyroAngle = 0.0;
+    gyroAngleRad = 0.0;
+
     resetDistancesForNewWaypoint();
 }
 
@@ -401,12 +497,26 @@ void resetDistancesForNewWaypoint()
     distRightPrev = 0.0;
     distTotal = 0.0;
     distTotalPrev = 0.0;  
+
+    gyroLastUpdateMicros = micros();
 }
 
 
 /**
  * Determine heading required to get from a given global co-ordinate (facing in a given heading) to 
  * another global go-ordinate.
+ * 
+ * The current position and heading is always translated to (0,0) 0 radians (ie. looking along the x-axis from (0,0)) and
+ * this function will return a value between 0..6.28 where radians grows counter-clockwise:
+ * 
+ * (10,0)     0 rad
+ * (10,10)    0.78 rad (pi/4)
+ * (0,10)     1.57 rad (pi/2)     
+ * (-10,10)   2.36 rad (3pi/4) 
+ * (-10,0)    3.14 rad (pi)
+ * (-10,-10)  3.92 rad (5pi/4)
+ * (0,-10)    4.71 rad (3pi/2)
+ * (10,-10)   5.49 rad (7pi/4)
  * 
  * @param double toX              destination global x co-ord
  * @param double toY              destination global y co-ord
@@ -427,7 +537,7 @@ double getHeading(double toX, double toY, double fromX, double fromY, double cur
 //  snprintf_P(report, sizeof(report), PSTR("to relative (%s, %s)"), ftoa(floatBuf1, x), ftoa(floatBuf2, y));    
 //  Serial.println(report);
 
-    if (x <= 0.01 && x >= -0.01)
+    if (x <= 0.01 && x >= -0.01)            // x == 0
     {
         if (y < 0.0)
         {
@@ -462,12 +572,16 @@ double getHeading(double toX, double toY, double fromX, double fromY, double cur
         }
     }
 
+    /**
+     * BUG: I think we're missing a condition here where y = 0. If y = 0 and x > 0 then we correctly maintain the current pose, but if x < 0 then we need to do a 180.
+     */
+
     return rad;
 }
 
 
 /**
- * Our heading is so wrong we should correct with a pivot (on-the-spot) rotation rather than PID.
+ * Our heading is so wrong we should correct with a pivot (on-the-spot) rotation rather than PID (using odometry).
  */
 void correctHeadingWithPivotTurn(double headingError)
 {
@@ -477,7 +591,7 @@ void correctHeadingWithPivotTurn(double headingError)
     
     double arcLength = ((headingError / (2*M_PI)) * (2*M_PI*BASERADIUS));
     
-    snprintf_P(report, sizeof(report), PSTR("   CORRECTING [%s] rad, spin arc length [%s] [%s]"), ftoa(floatBuf1, headingError), ftoa(floatBuf2, arcLength)); 
+    snprintf_P(report, sizeof(report), PSTR("   CORRECTING [%s] rad, spin arc length [%s]"), ftoa(floatBuf1, headingError), ftoa(floatBuf2, arcLength)); 
     Serial.println(report);      
     
     encoders.getCountsAndResetLeft();
@@ -486,10 +600,12 @@ void correctHeadingWithPivotTurn(double headingError)
     
     if (headingError > 0)
     {
+        // left backwards, right forwards (counter clockwise ("left")): radians are positive CCW
         motors.setSpeeds(-1 * PIVOT_TURN_SPEED, PIVOT_TURN_SPEED); 
     }
     else
     {
+        // left forwards, right backwards (clockwise, ("right"))
         motors.setSpeeds(PIVOT_TURN_SPEED, -1 * PIVOT_TURN_SPEED);
     }
     
@@ -509,6 +625,188 @@ void correctHeadingWithPivotTurn(double headingError)
     Serial.println(report);      
     
     delay(PIVOT_TURN_SLEEP_MS);    
+}
+
+
+/**
+ * Our heading is so wrong we should correct with a pivot (on-the-spot) rotation rather than PID (using gyroscope).
+ */
+void correctHeadingWithPivotTurnGyro(double headingError)
+{
+    motors.setSpeeds(0, 0);
+
+    updateGyroscopeHeading();
+    double diff, gyroStartAngleRad = gyroAngleRad;
+    bool skip;
+
+    snprintf_P(report, sizeof(report), PSTR("   CORRECTING [%s] rad %s, gyroStartAngleRad [%s]"), ftoa(floatBuf1, headingError), ((headingError > 0) ? "CCW" : "CW"), ftoa(floatBuf2, gyroStartAngleRad)); 
+    Serial.println(report);      
+
+    buzzer.playFromProgramSpace(encoderErrorRight);
+    delay(PIVOT_TURN_SLEEP_MS);
+    
+    if (headingError > 0)
+    {
+        // left backwards, right forwards (counter clockwise ("left")): radians are positive CCW
+        motors.setSpeeds(-1 * PIVOT_TURN_SPEED, PIVOT_TURN_SPEED); 
+
+        do
+        {
+           delay(10);
+           updateGyroscopeHeading();
+           skip = false;
+
+           // Ignore noise, the angle SHOULD be increasing
+           if ((fabs(gyroStartAngleRad - gyroAngleRad) < 0.02) || (fabs(gyroStartAngleRad - gyroAngleRad) > ((2*M_PI) - 0.02)))
+           {
+//            Serial.println("Ignoring noise");
+              skip = true;
+              continue;
+           }
+          
+           if (gyroAngleRad > gyroStartAngleRad)
+           {
+              diff = gyroAngleRad - gyroStartAngleRad;
+           }
+           else
+           {
+              diff = ((2*M_PI) - gyroStartAngleRad) + gyroAngleRad;
+           }
+
+           Serial.println(diff);
+        }
+        while (skip || (diff < headingError));
+    }
+    else
+    {
+        // left forwards, right backwards (clockwise, ("right"))
+        motors.setSpeeds(PIVOT_TURN_SPEED, -1 * PIVOT_TURN_SPEED);
+
+        do
+        {
+            delay(10);
+            updateGyroscopeHeading();
+            skip = false;
+
+            // Ignore noise, the angle SHOULD be decreasing
+            if ((fabs(gyroStartAngleRad - gyroAngleRad) < 0.02) || (fabs(gyroStartAngleRad - gyroAngleRad) > ((2*M_PI) - 0.02)))
+            {
+//              Serial.println("Ignoring noise");
+                skip = true;
+                continue;
+            }
+            
+            if (gyroAngleRad < gyroStartAngleRad)
+            {
+                diff = gyroAngleRad - gyroStartAngleRad;
+            }
+            else
+            {
+                diff = -1.0 * (gyroStartAngleRad + ((2*M_PI) - gyroAngleRad)); 
+            }
+
+            Serial.println(diff);
+        }
+        while (skip || (diff > headingError));
+    }
+    
+    motors.setSpeeds(0, 0);
+
+    snprintf_P(report, sizeof(report), PSTR("   CORRECTED heading error of [%s], current gyroAngleRad [%s] (diff [%s])"), ftoa(floatBuf1, headingError), ftoa(floatBuf2, gyroAngleRad), ftoa(floatBuf3, diff)); 
+    Serial.println(report);      
+
+    delay(PIVOT_TURN_SLEEP_MS); 
+}
+
+
+/**
+ * Our heading is so wrong we should correct with a pivot (on-the-spot) rotation rather than PID (using magnetometer).
+ */
+void correctHeadingWithPivotTurnMagnetometer(double headingError)
+{
+    motors.setSpeeds(0, 0);
+
+    updateMagnetometerHeading();
+    double diff, magnetoStartAngleRad = magnetoAngleRad;
+    bool skip;
+
+    snprintf_P(report, sizeof(report), PSTR("   CORRECTING [%s] rad %s, magnetoStartAngleRad [%s]"), ftoa(floatBuf1, headingError), ((headingError > 0) ? "CCW" : "CW"), ftoa(floatBuf2, magnetoStartAngleRad)); 
+    Serial.println(report);      
+
+    buzzer.playFromProgramSpace(encoderErrorRight);
+    delay(PIVOT_TURN_SLEEP_MS);
+    
+    if (headingError > 0)
+    {
+        // left backwards, right forwards (counter clockwise ("left")): radians are positive CCW
+        motors.setSpeeds(-1 * PIVOT_TURN_SPEED, PIVOT_TURN_SPEED); 
+
+        do
+        {
+           delay(10);
+           updateMagnetometerHeading();
+           skip = false;
+
+           // Ignore noise, the angle SHOULD be increasing
+           if ((fabs(magnetoStartAngleRad - magnetoAngleRad) < 0.04) || (fabs(magnetoStartAngleRad - magnetoAngleRad) > ((2*M_PI) - 0.04)))
+           {
+//            Serial.println("Ignoring noise");
+              skip = true;
+              continue;
+           }
+          
+           if (magnetoAngleRad > magnetoStartAngleRad)
+           {
+              diff = magnetoAngleRad - magnetoStartAngleRad;
+           }
+           else
+           {
+              diff = ((2*M_PI) - magnetoStartAngleRad) + magnetoAngleRad;
+           }
+
+           Serial.println(diff);
+        }
+        while (skip || (diff < headingError));
+    }
+    else
+    {
+        // left forwards, right backwards (clockwise, ("right"))
+        motors.setSpeeds(PIVOT_TURN_SPEED, -1 * PIVOT_TURN_SPEED);
+
+        do
+        {
+            delay(10);
+            updateMagnetometerHeading();
+            skip = false;
+
+            // Ignore noise, the angle SHOULD be decreasing
+            if ((fabs(magnetoStartAngleRad - magnetoAngleRad) < 0.04) || (fabs(magnetoStartAngleRad - magnetoAngleRad) > ((2*M_PI) - 0.04)))
+            {
+//              Serial.println("Ignoring noise");
+                skip = true;
+                continue;
+            }
+            
+            if (magnetoAngleRad < magnetoStartAngleRad)
+            {
+                diff = magnetoAngleRad - magnetoStartAngleRad;
+            }
+            else
+            {
+                diff = -1.0 * (magnetoStartAngleRad + ((2*M_PI) - magnetoAngleRad)); 
+            }
+
+            Serial.println(diff);
+        }
+        while (skip || (diff > headingError));
+    }
+    
+    motors.setSpeeds(0, 0);
+
+    snprintf_P(report, sizeof(report), PSTR("   CORRECTED heading error of [%s], current magnetoAngleRad [%s] (diff [%s])"), ftoa(floatBuf1, headingError), ftoa(floatBuf2, magnetoAngleRad), ftoa(floatBuf3, diff)); 
+    Serial.println(report);      
+
+    delay(PIVOT_TURN_SLEEP_MS); 
 }
 
 
@@ -563,6 +861,68 @@ int convertVelocityToMotorSpeed(double velocity, double left)
     return speed;
 }
 
+
+/**
+ * Update gyroscope heading.
+ * 
+ * Similar to getHeading(), this will always update gyroAngleRad to a value between 0 and 2*PI where the value grows in the
+ * counter-clockwise direction.
+ */
+void updateGyroscopeHeading()
+{
+    while ( ! imu.readReg(LSM6::STATUS_REG) & 0x08);
+    imu.read();
+
+    if (imu.timeoutOccurred())
+    {
+      buzzer.playFromProgramSpace(alarm);    
+    }
+
+    // Update the orientation as determined by the gyroscope
+    int16_t gyroTurnRate = imu.g.z - gyroOffset;      // int16_t
+
+    unsigned long now = micros();                     // uint32_t
+    unsigned long dt = now - gyroLastUpdateMicros;
+    gyroLastUpdateMicros = now;
+
+    // Determine how much we've rotated around Z axis since last measurement
+    int32_t rotation = (int32_t)gyroTurnRate * dt;    // signed 16 bits -> signed 32 bits multiplied by unsigned long
+
+    // rotation is measured in gyro digits * micro-seconds. convert to degrees and add to the current angle
+    gyroAngleDifference = ((double)rotation * GYRODIGITS_TO_DPS) * 0.000001;
+    gyroAngle += gyroAngleDifference;  
+
+    while (gyroAngle < 0)
+    {
+        gyroAngle += 360;
+    }
+    while (gyroAngle > 360)
+    {
+        gyroAngle -= 360;
+    }
+
+    gyroAngleRad = gyroAngle * (2*M_PI / 360.0);
+}
+
+
+/**
+ * Update magnetometer heading (blocks until magnetometer ready)
+ * 
+ * Similar to getHeading(), this will always update magnetoAngleRad to a value between 0 and 2*PI where the value grows in the
+ * counter-clockwise direction.
+ */
+void updateMagnetometerHeading()
+{
+    while ( ! compass.ready())
+    {
+        delay(1);
+    }
+
+    // 360 - heading converts compass so that it grows from 0..360 CCW (ie. opposite to actual compass)
+    magnetoAngle = 360 - compass.readHeading();
+    magnetoAngleRad = magnetoAngle * ((2*M_PI) / 360.0);
+}
+
  
 /**
  * Helper to print doubles
@@ -586,4 +946,153 @@ char *ftoa(char *a, double f)
     sprintf(a, "%04d", abs((long)((f - (double)heiltal) * 10000.0)));
     return ret;
 }
+
+
+/****************************************************************************************************************
+ * Calibration 
+ ****************************************************************************************************************/
+
+/**
+ * Calibrate fixed offset out of the gyroscope.
+ */
+void calibrateGyro()
+{
+    delay(5000);                          // give user time to place device at rest
+    buzzer.playFromProgramSpace(alarm);
+
+    Serial.println("Calibrating gyroscope ...");
+    if ( ! imu.init())
+    {
+        Serial.println("Failed to detect or initialize IMU, halting.");
+        while(1);
+    }
+
+    imu.enableDefault();
+    delay(500);
+
+    int32_t gyroTotal = 0;
+    for (uint16_t i = 0; i < 1024; i++)
+    {
+        while ( ! imu.readReg(LSM6::STATUS_REG) & 0x08);
+        imu.read();
+        gyroTotal += imu.g.z;             // gyro values are int16_t (signed)
+    }
+
+    gyroOffset = gyroTotal / 1024;        // average across all 1024 samples
+    Serial.println("Gyroscope calibration complete");
+    
+    buzzer.playFromProgramSpace(alarm);  
+}
+
+
+/**
+ * Calibrate magnetometer
+ */
+void calibrateMagnetometer()
+{
+    delay(5000);                          // give user time to pick up device
+    buzzer.playFromProgramSpace(alarm);
+
+    Serial.println("Calibrating compass, please move device around all axes ...");
+
+    compass.init();
+    compass.resetCalibration();
+
+    int calibrationTime = 0;
+    while (calibrationTime < 20000)
+    {
+        compass.readHeading();
+        delay(200);
+        calibrationTime += 200;
+    }
+
+    Serial.println("Compass calibration complete");
+    buzzer.playFromProgramSpace(alarm);
+}
+
+
+/****************************************************************************************************************
+ * Demos 
+ ****************************************************************************************************************/
+
+void gyroBasedOrientation() 
+{
+    resetToOrigin();
+
+    correctHeadingWithPivotTurnGyro(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnGyro(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnGyro(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnGyro(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnGyro(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnGyro(1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnGyro(1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnGyro(1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnGyro(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnGyro(1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnGyro(1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnGyro(1.57);  
+}
+
+void magnetometerBasedOrientation() 
+{
+    resetToOrigin();
+
+    correctHeadingWithPivotTurnMagnetometer(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnMagnetometer(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnMagnetometer(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnMagnetometer(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnMagnetometer(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnMagnetometer(1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnMagnetometer(1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnMagnetometer(1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnMagnetometer(-1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnMagnetometer(1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnMagnetometer(1.57);
+    delay(100);
+    resetDistancesForNewWaypoint();
+    correctHeadingWithPivotTurnMagnetometer(1.57);  
+}
+
 
