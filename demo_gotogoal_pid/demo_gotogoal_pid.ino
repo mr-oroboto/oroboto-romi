@@ -23,7 +23,7 @@
 #define CAP_ANGULAR_VELOCITY_SIGNAL true        // cap angular velocity correction allowed in PID mode
 #define ANGULAR_VELOCITY_SIGNAL_LIMIT 0.2
 
-#define ABORT_WAYPOINT_AFTER_DISTANCE_INCREASES true
+#define ABORT_WAYPOINT_AFTER_DISTANCE_INCREASES false   // true
 #define DISTANCE_INCREASE_ITERATION_THRESHOLD 1
 #define DISTANCE_INCREASE_DRIFT_FROM_INITIAL_VECTOR_THRESHOLD 0.25
 
@@ -37,6 +37,18 @@
 
 #define USE_GYRO_FOR_HEADING true
 #define GYRODIGITS_TO_DPS 0.00875
+
+#define I2C_PI_ADDR 0b10011                     // 0x0A
+#define I2C_WAYPOINTS_MAX 16
+#define I2C_WAYPOINTS_PER_SEGMENT 4
+#define I2C_MARKER_SEGMENT_START 0xA0
+#define I2C_MARKER_SEGMENT_END 0xA1
+#define I2C_MARKER_PAYLOAD_START 0xA2
+#define I2C_MARKER_END_WAYPOINTS 0xA3
+
+uint8_t waypointPayload[I2C_WAYPOINTS_MAX * 2];
+bool waypointPayloadInProgress = false;
+uint8_t waypointPayloadCurrentCount = 0;
 
 struct Pose {
   double        x;
@@ -81,44 +93,8 @@ const char encoderErrorRight[] PROGMEM = "!<e2";
 const char starting[] PROGMEM = "! L16 V8 gcdgcdgcdgcd";
 const char finished[] PROGMEM = "! L16 V8 cdefgab>cbagfedc";
 const char alarm[]  PROGMEM = "!<c2";
+const char soundOk[] PROGMEM = "v10>>g16>>>c16";
 
-double waypointsSquare[][2] = {
-    {100.0, 0.0},
-    {100.0, 100.0},
-    {0.0, 100.0},
-    {0.0, 0.0}
-};
-
-double waypointsLine[][2] = {
-    {100.0, 0.0}
-};
-
-double waypointsRectangle[][2] = {
-    {-50.0, 50.0},
-    {50.0, 50.0},
-    {0.0, 100.0},
-    {0.0, 0.0}
-};
-
-double waypointsStar[][2] = {
-    {-40.0, 90.0},
-    {-80.0, 0.0},
-    {40.0, 60.0},
-    {-100.0, 60.0},
-    {0.0, 0.0}
-};
-
-double waypointsTriangles[][2] = {
-    {50.0, 50.0},
-    {100.0, 0.0},
-    {100.0, 100.0},
-    {50.0, 50.0},
-    {0.0, 100.0},
-    {0.0, 0.0}
-};
-
-#define NUM_WAYPOINTS 6
-double (*waypoints)[2] = waypointsTriangles;
 
 /*****************************************************************************************************
  * Entrypoint
@@ -133,31 +109,110 @@ void setup()
     {
 //      calibrateMagnetometer();      // far less accurate than the gyro until we can use it for fusion
         calibrateGyro();
-    }
-    
-    /* --------------------------------------------------------------------------------------------- */
-    
-    delay(2000);
-    snprintf_P(report, sizeof(report), PSTR("************************ START ************************"));    
-    Serial.println(report);      
-    
-    buzzer.playFromProgramSpace(starting);
-    delay(2000);
-
-    resetToOrigin();
-    for (int i = 0; i < NUM_WAYPOINTS; i++)
-    {
-        goToWaypoint(waypoints[i][0], waypoints[i][1]);
-    }
-
-    snprintf_P(report, sizeof(report), PSTR("************************ END ************************"));    
-    Serial.println(report);      
-
-    buzzer.playFromProgramSpace(finished);
+    }    
 }
 
 void loop() 
 {
+   if (pollForWaypoints())
+   {
+      buzzer.playFromProgramSpace(starting);
+      delay(2000);
+
+      resetToOrigin();
+      for (uint8_t i = 0; i < waypointPayloadCurrentCount; i++)
+      {
+//         snprintf_P(report, sizeof(report), PSTR("waypoint[%d]: (%d,%d)"), i, waypointPayload[(i*2)], waypointPayload[(i*2)+1]);    
+//         Serial.println(report);
+           goToWaypoint((double)waypointPayload[(i*2)], (double)waypointPayload[(i*2)+1]);
+      }
+
+      buzzer.playFromProgramSpace(finished);
+      delay(2000);
+   }
+   
+   delay(500);
+}
+
+
+/**
+ * Poll the Raspberry Pi (acting as an I2C slave) for updated waypoints
+ */
+bool pollForWaypoints()
+{
+   bool receivedFullPayload = false;
+   
+   Wire.beginTransmission(I2C_PI_ADDR);
+   Wire.write('p');                             // ping!
+   Wire.endTransmission();
+
+   // The Pi's BSC FIFO is 16 bytes deep, keep the maximum transmit segment below that (10 bytes)
+   Wire.requestFrom((uint8_t)I2C_PI_ADDR, (uint8_t)(I2C_WAYPOINTS_PER_SEGMENT*2)+2);  // 2 bytes per waypoint (x,y) + start and end markers
+   uint8_t startMarker, endMarker, i;
+   uint8_t waypoints[I2C_WAYPOINTS_PER_SEGMENT*2];
+
+   startMarker = Wire.read();
+   for (i = 0; i < (I2C_WAYPOINTS_PER_SEGMENT*2); i++)
+   {
+      waypoints[i] = Wire.read();
+   }
+   endMarker = Wire.read();
+   Wire.endTransmission();  
+
+   if (startMarker == I2C_MARKER_SEGMENT_START && endMarker == I2C_MARKER_SEGMENT_END)
+   {
+      Serial.println("Received valid I2C segment");
+      buzzer.playFromProgramSpace(soundOk);
+      delay(500);
+
+      // Valid payload, either part of an existing waypoint payload, or the start of a new one
+      if (waypoints[0] == I2C_MARKER_PAYLOAD_START && waypoints[1] == I2C_MARKER_PAYLOAD_START)
+      {
+         buzzer.playFromProgramSpace(soundOk);
+
+         Serial.println("  - Segment starts new waypoint payload");
+         memset(waypointPayload, 0, sizeof(waypointPayload));
+         waypointPayloadInProgress = false;
+         waypointPayloadCurrentCount = 0;
+         i = 1;
+      }
+      else
+      {
+         if (waypointPayloadInProgress)
+         {
+            Serial.println("  - Segment is a payload extension but no payload build is in progress, ignoring");
+            return false;
+         }
+         else
+         {
+            Serial.println("  - Segment is a payload extension");
+         }
+
+         i = 0;
+      }
+
+      for (; i < I2C_WAYPOINTS_PER_SEGMENT; i++)
+      {
+         if (waypoints[(i*2)] == I2C_MARKER_END_WAYPOINTS && waypoints[(i*2)+1] == I2C_MARKER_END_WAYPOINTS)
+         {
+            Serial.println("  - Received explicit waypoint payload end marker");
+            receivedFullPayload = true;
+         }
+         else
+         {
+            waypointPayload[(waypointPayloadCurrentCount*2)] = waypoints[(i*2)];
+            waypointPayload[(waypointPayloadCurrentCount*2)+1] = waypoints[(i*2)+1];
+
+            if (++waypointPayloadCurrentCount >= I2C_WAYPOINTS_MAX)
+            {
+               Serial.println("  - Waypoint payload is full, ignoring further waypoint data");
+               receivedFullPayload = true; 
+            }
+         }         
+      }
+   }
+   
+   return receivedFullPayload;
 }
 
 /*****************************************************************************************************
@@ -1014,6 +1069,64 @@ void calibrateMagnetometer()
 /****************************************************************************************************************
  * Demos 
  ****************************************************************************************************************/
+
+double waypointsSquare[][2] = {
+    {100.0, 0.0},
+    {100.0, 100.0},
+    {0.0, 100.0},
+    {0.0, 0.0}
+};
+
+double waypointsLine[][2] = {
+    {100.0, 0.0}
+};
+
+double waypointsRectangle[][2] = {
+    {-50.0, 50.0},
+    {50.0, 50.0},
+    {0.0, 100.0},
+    {0.0, 0.0}
+};
+
+double waypointsStar[][2] = {
+    {-40.0, 90.0},
+    {-80.0, 0.0},
+    {40.0, 60.0},
+    {-100.0, 60.0},
+    {0.0, 0.0}
+};
+
+double waypointsTriangles[][2] = {
+    {50.0, 50.0},
+    {100.0, 0.0},
+    {100.0, 100.0},
+    {50.0, 50.0},
+    {0.0, 100.0},
+    {0.0, 0.0}
+};
+
+#define NUM_WAYPOINTS 6
+double (*waypoints)[2] = waypointsTriangles;
+
+void preprogrammedWaypoints()
+{
+    snprintf_P(report, sizeof(report), PSTR("************************ START ************************"));    
+    Serial.println(report);
+    
+    buzzer.playFromProgramSpace(starting);
+    delay(2000);
+
+    resetToOrigin();
+    for (int i = 0; i < NUM_WAYPOINTS; i++)
+    {
+        goToWaypoint(waypoints[i][0], waypoints[i][1]);
+    }
+
+    snprintf_P(report, sizeof(report), PSTR("************************ END ************************"));    
+    Serial.println(report);      
+
+    buzzer.playFromProgramSpace(finished);
+}
 
 void gyroBasedOrientation() 
 {
