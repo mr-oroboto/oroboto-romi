@@ -45,6 +45,14 @@
 #define I2C_MARKER_SEGMENT_END 0xA1
 #define I2C_MARKER_PAYLOAD_START 0xA2
 #define I2C_MARKER_END_WAYPOINTS 0xA3
+#define I2C_POSE_SNAPSHOTS_PER_SEGMENT 4
+
+#define VCC 5.0
+#define VOLTS_PER_CM_DIVISOR 1300.48              // 512.0 * 2.54 (from datasheet)
+#define VOLTS_PER_CM VCC / VOLTS_PER_CM_DIVISOR   // 0.003844734251969
+#define ADC_LSB_PER_VOLT 1023 / VCC               // 1023 / 5.0
+
+#define MAX_POSE_SNAPSHOTS 64
 
 uint8_t waypointPayload[I2C_WAYPOINTS_MAX * 2];
 bool waypointPayloadInProgress = false;
@@ -54,7 +62,8 @@ struct Pose {
   double        x;
   double        y;
   double        heading;
-  uint32_t      timestamp;
+  double        distanceToObstacle;
+  uint32_t      timestamp;  
 };
 
 Romi32U4Encoders  encoders;
@@ -63,8 +72,10 @@ Romi32U4Motors    motors;
 LSM6              imu;
 QMC5883L          compass;
 
-struct Pose currentPose;          // (believed) current position and heading
-struct Pose referencePose;        // pose of reference waypoint (heading is heading required from currentPose)
+struct Pose currentPose;                        // (believed) current position and heading
+struct Pose referencePose;                      // pose of reference waypoint (heading is heading required from currentPose)
+struct Pose snapshotPoses[MAX_POSE_SNAPSHOTS];  // capture snapshots of our pose along each waypoint path for reporting
+int poseSnapshotCount;
 
 double headingError;              // for PID proportional term
 double headingErrorPrev;          // for PID derivative term
@@ -105,6 +116,8 @@ void setup()
     Serial.begin(9600);
     Wire.begin();
 
+    pinMode(A4, INPUT);               // use the ADC on A4
+
     if (USE_GYRO_FOR_HEADING)
     {
 //      calibrateMagnetometer();      // far less accurate than the gyro until we can use it for fusion
@@ -122,9 +135,43 @@ void loop()
       resetToOrigin();
       for (uint8_t i = 0; i < waypointPayloadCurrentCount; i++)
       {
-//         snprintf_P(report, sizeof(report), PSTR("waypoint[%d]: (%d,%d)"), i, waypointPayload[(i*2)], waypointPayload[(i*2)+1]);    
-//         Serial.println(report);
-           goToWaypoint((double)waypointPayload[(i*2)], (double)waypointPayload[(i*2)+1]);
+           snprintf_P(report, sizeof(report), PSTR("waypoint[%d]: (%d,%d)"), i, waypointPayload[(i*2)], waypointPayload[(i*2)+1]);    
+           Serial.println(report);
+//         goToWaypoint((double)waypointPayload[(i*2)], (double)waypointPayload[(i*2)+1]);
+
+           resetDistancesForNewWaypoint();
+
+           snapshotPoses[poseSnapshotCount].heading = 1;
+           snapshotPoses[poseSnapshotCount].x = 2;
+           snapshotPoses[poseSnapshotCount].y = 3;
+           snapshotPoses[poseSnapshotCount].distanceToObstacle = 4;
+           poseSnapshotCount++;          
+
+           snapshotPoses[poseSnapshotCount].heading = 2;
+           snapshotPoses[poseSnapshotCount].x = 4;
+           snapshotPoses[poseSnapshotCount].y = 6;
+           snapshotPoses[poseSnapshotCount].distanceToObstacle = 8;
+           poseSnapshotCount++;          
+
+           snapshotPoses[poseSnapshotCount].heading = 3;
+           snapshotPoses[poseSnapshotCount].x = 6;
+           snapshotPoses[poseSnapshotCount].y = 9;
+           snapshotPoses[poseSnapshotCount].distanceToObstacle = 12;
+           poseSnapshotCount++;          
+
+           snapshotPoses[poseSnapshotCount].heading = 4;
+           snapshotPoses[poseSnapshotCount].x = 8;
+           snapshotPoses[poseSnapshotCount].y = 12;
+           snapshotPoses[poseSnapshotCount].distanceToObstacle = 16;
+           poseSnapshotCount++;          
+
+           snapshotPoses[poseSnapshotCount].heading = 5;
+           snapshotPoses[poseSnapshotCount].x = 10;
+           snapshotPoses[poseSnapshotCount].y = 15;
+           snapshotPoses[poseSnapshotCount].distanceToObstacle = 20;
+           poseSnapshotCount++;          
+
+           reportPoseSnapshots();
       }
 
       buzzer.playFromProgramSpace(finished);
@@ -134,90 +181,10 @@ void loop()
    delay(500);
 }
 
-
-/**
- * Poll the Raspberry Pi (acting as an I2C slave) for updated waypoints
- */
-bool pollForWaypoints()
-{
-   bool receivedFullPayload = false;
-   
-   Wire.beginTransmission(I2C_PI_ADDR);
-   Wire.write('p');                             // ping!
-   Wire.endTransmission();
-
-   // The Pi's BSC FIFO is 16 bytes deep, keep the maximum transmit segment below that (10 bytes)
-   Wire.requestFrom((uint8_t)I2C_PI_ADDR, (uint8_t)(I2C_WAYPOINTS_PER_SEGMENT*2)+2);  // 2 bytes per waypoint (x,y) + start and end markers
-   uint8_t startMarker, endMarker, i;
-   uint8_t waypoints[I2C_WAYPOINTS_PER_SEGMENT*2];
-
-   startMarker = Wire.read();
-   for (i = 0; i < (I2C_WAYPOINTS_PER_SEGMENT*2); i++)
-   {
-      waypoints[i] = Wire.read();
-   }
-   endMarker = Wire.read();
-   Wire.endTransmission();  
-
-   if (startMarker == I2C_MARKER_SEGMENT_START && endMarker == I2C_MARKER_SEGMENT_END)
-   {
-      Serial.println("Received valid I2C segment");
-      buzzer.playFromProgramSpace(soundOk);
-      delay(500);
-
-      // Valid payload, either part of an existing waypoint payload, or the start of a new one
-      if (waypoints[0] == I2C_MARKER_PAYLOAD_START && waypoints[1] == I2C_MARKER_PAYLOAD_START)
-      {
-         buzzer.playFromProgramSpace(soundOk);
-
-         Serial.println("  - Segment starts new waypoint payload");
-         memset(waypointPayload, 0, sizeof(waypointPayload));
-         waypointPayloadInProgress = false;
-         waypointPayloadCurrentCount = 0;
-         i = 1;
-      }
-      else
-      {
-         if (waypointPayloadInProgress)
-         {
-            Serial.println("  - Segment is a payload extension but no payload build is in progress, ignoring");
-            return false;
-         }
-         else
-         {
-            Serial.println("  - Segment is a payload extension");
-         }
-
-         i = 0;
-      }
-
-      for (; i < I2C_WAYPOINTS_PER_SEGMENT; i++)
-      {
-         if (waypoints[(i*2)] == I2C_MARKER_END_WAYPOINTS && waypoints[(i*2)+1] == I2C_MARKER_END_WAYPOINTS)
-         {
-            Serial.println("  - Received explicit waypoint payload end marker");
-            receivedFullPayload = true;
-         }
-         else
-         {
-            waypointPayload[(waypointPayloadCurrentCount*2)] = waypoints[(i*2)];
-            waypointPayload[(waypointPayloadCurrentCount*2)+1] = waypoints[(i*2)+1];
-
-            if (++waypointPayloadCurrentCount >= I2C_WAYPOINTS_MAX)
-            {
-               Serial.println("  - Waypoint payload is full, ignoring further waypoint data");
-               receivedFullPayload = true; 
-            }
-         }         
-      }
-   }
-   
-   return receivedFullPayload;
-}
-
 /*****************************************************************************************************
  * End entrypoint
  *****************************************************************************************************/
+
 
 /**
  * Go to the specified waypoint from the current waypoint.
@@ -375,6 +342,15 @@ void goToWaypoint(double x, double y)
             headingErrorIntegral = 0.0;
         }
 
+        if (iteration % 4 == 0 && poseSnapshotCount < MAX_POSE_SNAPSHOTS)
+        {
+            snapshotPoses[poseSnapshotCount].heading = currentPose.heading;
+            snapshotPoses[poseSnapshotCount].x = currentPose.x;
+            snapshotPoses[poseSnapshotCount].y = currentPose.y;
+            snapshotPoses[poseSnapshotCount].distanceToObstacle = getSonarRangedDistance();
+            poseSnapshotCount++;          
+        }
+
         // What is the magnitude of the vector between us and our target?
         targetVectorMagnitude = sqrt(sq(referencePose.x - currentPose.x) + sq(referencePose.y - currentPose.y));
         if (iteration == 0)
@@ -516,6 +492,170 @@ void goToWaypoint(double x, double y)
  ****************************************************************************************************************/
 
 /**
+ * Poll the Raspberry Pi (acting as an I2C slave) for updated waypoints
+ */
+bool pollForWaypoints()
+{
+   bool receivedFullPayload = false;
+   
+   Wire.beginTransmission(I2C_PI_ADDR);
+   Wire.write('p');                             // ping!
+   Wire.endTransmission();
+
+   // The Pi's BSC FIFO is 16 bytes deep, keep the maximum transmit segment below that (10 bytes)
+   Wire.requestFrom((uint8_t)I2C_PI_ADDR, (uint8_t)(I2C_WAYPOINTS_PER_SEGMENT*2)+2);  // 2 bytes per waypoint (x,y) + start and end markers
+   uint8_t startMarker, endMarker, i;
+   uint8_t waypoints[I2C_WAYPOINTS_PER_SEGMENT*2];
+
+   startMarker = Wire.read();
+   for (i = 0; i < (I2C_WAYPOINTS_PER_SEGMENT*2); i++)
+   {
+      waypoints[i] = Wire.read();
+   }
+   endMarker = Wire.read();
+   Wire.endTransmission();  
+
+   if (startMarker == I2C_MARKER_SEGMENT_START && endMarker == I2C_MARKER_SEGMENT_END)
+   {
+      Serial.println("Received valid I2C segment");
+      buzzer.playFromProgramSpace(soundOk);
+      delay(500);
+
+      // Valid payload, either part of an existing waypoint payload, or the start of a new one
+      if (waypoints[0] == I2C_MARKER_PAYLOAD_START && waypoints[1] == I2C_MARKER_PAYLOAD_START)
+      {
+         buzzer.playFromProgramSpace(soundOk);
+
+         Serial.println("  - Segment starts new waypoint payload");
+         memset(waypointPayload, 0, sizeof(waypointPayload));
+         waypointPayloadInProgress = false;
+         waypointPayloadCurrentCount = 0;
+         i = 1;
+      }
+      else
+      {
+         if (waypointPayloadInProgress)
+         {
+            Serial.println("  - Segment is a payload extension but no payload build is in progress, ignoring");
+            return false;
+         }
+         else
+         {
+            Serial.println("  - Segment is a payload extension");
+         }
+
+         i = 0;
+      }
+
+      for (; i < I2C_WAYPOINTS_PER_SEGMENT; i++)
+      {
+         if (waypoints[(i*2)] == I2C_MARKER_END_WAYPOINTS && waypoints[(i*2)+1] == I2C_MARKER_END_WAYPOINTS)
+         {
+            Serial.println("  - Received explicit waypoint payload end marker");
+            receivedFullPayload = true;
+         }
+         else
+         {
+            waypointPayload[(waypointPayloadCurrentCount*2)] = waypoints[(i*2)];
+            waypointPayload[(waypointPayloadCurrentCount*2)+1] = waypoints[(i*2)+1];
+
+            if (++waypointPayloadCurrentCount >= I2C_WAYPOINTS_MAX)
+            {
+               Serial.println("  - Waypoint payload is full, ignoring further waypoint data");
+               receivedFullPayload = true; 
+            }
+         }         
+      }
+   }
+   
+   return receivedFullPayload;
+}
+
+
+/**
+ * Report the pose snapshots from the last waypoint to the Raspberry Pi.
+ */
+void reportPoseSnapshots()
+{
+    snprintf_P(report, sizeof(report), PSTR("Reporting %d pose snapshots:"), poseSnapshotCount);      
+    Serial.println(report);  
+
+    // Don't write more than 16 bytes at a time. Each snapshot (once rounded down to bytes from doubles) consumes 3 bytes
+    // so we report 4 snapshots per write.
+    unsigned char snapshotBuffer[(I2C_POSE_SNAPSHOTS_PER_SEGMENT*3)+2];          // 4 snapshots and header / trailer markers
+    int i;
+    
+    for (i = 0; i < poseSnapshotCount; i++)
+    {
+        int bufferIndex = i % I2C_POSE_SNAPSHOTS_PER_SEGMENT;   
+        
+        snprintf_P(report, sizeof(report), PSTR("   Adding snapshot [%d]: (%d,%d) dist %d"), i, (int)snapshotPoses[i].x, (int)snapshotPoses[i].y, (int)snapshotPoses[i].distanceToObstacle);      
+        Serial.println(report);  
+
+        snapshotBuffer[1+(bufferIndex*3)+0] = (unsigned char)((int)snapshotPoses[i].x);
+        snapshotBuffer[1+(bufferIndex*3)+1] = (unsigned char)((int)snapshotPoses[i].y);
+        snapshotBuffer[1+(bufferIndex*3)+2] = (unsigned char)((int)snapshotPoses[i].distanceToObstacle);      // todo heading
+      
+//        snapshotBuffer[1+(bufferIndex*3)+0] = (unsigned char)(75);
+//        snapshotBuffer[1+(bufferIndex*3)+1] = (unsigned char)(76);
+//        snapshotBuffer[1+(bufferIndex*3)+2] = (unsigned char)(77);      // todo heading
+
+        if ((i > 0) && (i % (I2C_POSE_SNAPSHOTS_PER_SEGMENT - 1) == 0))
+        {
+            Serial.println("   Writing snapshot buffer...");
+
+            snapshotBuffer[0] = I2C_MARKER_SEGMENT_START;
+            snapshotBuffer[13] = I2C_MARKER_SEGMENT_END;
+
+            Wire.beginTransmission(I2C_PI_ADDR);
+            Wire.write('r');                             // report
+            for (int j = 0; j < sizeof(snapshotBuffer); j++)
+            {
+               Wire.write(snapshotBuffer[j]);
+            }
+            Wire.endTransmission();
+
+            memset(snapshotBuffer, 0, sizeof(snapshotBuffer));
+        }
+    }
+
+    if (i % I2C_POSE_SNAPSHOTS_PER_SEGMENT != 0)
+    {
+        snprintf_P(report, sizeof(report), PSTR("   Writing trailing snapshot buffer with %d snapshots"), i % I2C_POSE_SNAPSHOTS_PER_SEGMENT);      
+        Serial.println(report);  
+
+        snapshotBuffer[0] = I2C_MARKER_SEGMENT_START;
+        snapshotBuffer[13] = I2C_MARKER_SEGMENT_END;
+
+        // todo: pad out the unused entries with markers
+
+        Wire.beginTransmission(I2C_PI_ADDR);
+        Wire.write('r');                             // report
+        for (int j = 0; j < sizeof(snapshotBuffer); j++)
+        {
+           Wire.write(snapshotBuffer[j]);
+        }
+        Wire.endTransmission();
+    }    
+}
+
+/**
+ * Get the current distance measured from the ultrasonic sensor. Returns a value in centimeters.
+ */
+double getSonarRangedDistance()
+{
+    double distance = 0;
+
+    int adc = analogRead(A4);
+    double mv = ((double)adc / (ADC_LSB_PER_VOLT)) * 1000.0;
+
+    distance = mv / (VOLTS_PER_CM * 1000.0);
+
+    return distance;
+}
+
+
+/**
  * Reset pose to (0,0) with heading of 0 rad.
  */
 void resetToOrigin() 
@@ -552,6 +692,7 @@ void resetDistancesForNewWaypoint()
     distRightPrev = 0.0;
     distTotal = 0.0;
     distTotalPrev = 0.0;  
+    poseSnapshotCount = 0;
 
     gyroLastUpdateMicros = micros();
 }
