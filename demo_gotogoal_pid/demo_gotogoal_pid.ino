@@ -81,7 +81,7 @@ QMC5883L          compass;
 struct Pose currentPose;                        // (believed) current position and heading
 struct Pose referencePose;                      // pose of reference waypoint (heading is heading required from currentPose)
 
-#define MAX_POSE_SNAPSHOTS 64
+#define MAX_POSE_SNAPSHOTS 48
 struct Pose poseSnapshots[MAX_POSE_SNAPSHOTS];  // capture snapshots of our pose along each waypoint path for reporting
 int         poseSnapshotCount;
 
