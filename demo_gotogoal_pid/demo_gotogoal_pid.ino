@@ -319,11 +319,7 @@ void goToWaypoint(double x, double y)
 
         if (iteration % 4 == 0 && poseSnapshotCount < MAX_POSE_SNAPSHOTS)
         {
-            poseSnapshots[poseSnapshotCount].heading = currentPose.heading;
-            poseSnapshots[poseSnapshotCount].x = currentPose.x;
-            poseSnapshots[poseSnapshotCount].y = currentPose.y;
-            poseSnapshots[poseSnapshotCount].distanceToObstacle = getSonarRangedDistance();
-            poseSnapshotCount++;          
+            recordSnapshot(currentPose.heading, currentPose.x, currentPose.y);
         }
 
         // What is the magnitude of the vector between us and our target?
@@ -631,6 +627,20 @@ void reportPoseSnapshots()
     }    
 }
 
+
+/**
+ * Record a snapshot of the current position and a range finding to the nearest obstacle.
+ */
+void recordSnapshot(double heading, double x, double y)
+{
+    poseSnapshots[poseSnapshotCount].heading = heading;
+    poseSnapshots[poseSnapshotCount].x = x;
+    poseSnapshots[poseSnapshotCount].y = y;
+    poseSnapshots[poseSnapshotCount].distanceToObstacle = getSonarRangedDistance();
+    poseSnapshotCount++;          
+}
+
+
 /**
  * Get the current distance measured from the ultrasonic sensor. Returns a value in centimeters.
  */
@@ -826,6 +836,7 @@ void correctHeadingWithPivotTurnGyro(double headingError)
     updateGyroscopeHeading();
     double diff, gyroStartAngleRad = gyroAngleRad;
     bool skip;
+    int i = 0;
 
     snprintf_P(report, sizeof(report), PSTR("   CORRECTING [%s] rad %s, gyroStartAngleRad [%s]"), ftoa(floatBuf1, headingError), ((headingError > 0) ? "CCW" : "CW"), ftoa(floatBuf2, gyroStartAngleRad)); 
     Serial.println(report);      
@@ -861,6 +872,11 @@ void correctHeadingWithPivotTurnGyro(double headingError)
               diff = ((2*M_PI) - gyroStartAngleRad) + gyroAngleRad;
            }
 
+           if ((i++ % 5) == 0)
+           {
+              recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
+           }
+           
            Serial.println(diff);
         }
         while (skip || (diff < headingError));
@@ -891,6 +907,11 @@ void correctHeadingWithPivotTurnGyro(double headingError)
             else
             {
                 diff = -1.0 * (gyroStartAngleRad + ((2*M_PI) - gyroAngleRad)); 
+            }
+
+            if ((i++ % 5) == 0)
+            {
+               recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
             }
 
             Serial.println(diff);
