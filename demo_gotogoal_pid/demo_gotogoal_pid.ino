@@ -141,7 +141,6 @@ void loop()
    {
       ledYellow(1);
       
-      resetToOrigin();
       for (uint8_t i = 0; i < waypointPayloadCurrentCount; i++)
       {
 #ifdef __DEBUG__
