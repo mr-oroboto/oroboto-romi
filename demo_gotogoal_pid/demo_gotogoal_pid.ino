@@ -954,8 +954,8 @@ void correctHeadingWithPivotTurnGyro(double headingError)
               diff = ((2*M_PI) - gyroStartAngleRad) + gyroAngleRad;
            }
 
-           // Only record a snapshot (which requires an ADC read, which can impact timing) during the first 75% of the rotation and even then only every 200ms
-           if (false && (diff < delaySafeHeadingError) && ((i++ % 40) == 0))
+           // Only record a snapshot (which requires an ADC read, which can impact timing) during the first 75% of the rotation and even then only every 400ms
+           if ((diff < delaySafeHeadingError) && ((i++ % 40) == 0))
            {
               recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
            }
@@ -996,8 +996,8 @@ void correctHeadingWithPivotTurnGyro(double headingError)
                 diff = -1.0 * (gyroStartAngleRad + ((2*M_PI) - gyroAngleRad)); 
             }
 
-           // Only record a snapshot (which requires an ADC read, which can impact timing) during the first 75% of the rotation and even then only every 200ms
-           if (false && (diff > delaySafeHeadingError) && ((i++ % 40) == 0))
+           // Only record a snapshot (which requires an ADC read, which can impact timing) during the first 75% of the rotation and even then only every 400ms
+           if ((diff > delaySafeHeadingError) && ((i++ % 40) == 0))
            {
               recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
            }
