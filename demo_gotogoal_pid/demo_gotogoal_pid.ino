@@ -35,7 +35,8 @@
 
 #define COUNTS_PER_REVOLUTION 1440.0            // number of encoder counts per wheel revolution (should be ~1440)
 
-#define USE_GYRO_FOR_HEADING true
+#define USE_GYRO_FOR_HEADING false
+#define USE_GYRO_FOR_PIVOT_TURN true
 #define GYRODIGITS_TO_DPS 0.00875
 
 #define I2C_PI_ADDR 0b10011                     // 0x0A
@@ -104,8 +105,8 @@ double        gyroAngleDifference = 0;
 double        magnetoAngle;
 double        magnetoAngleRad;
 
-#ifdef __DEBUG__                    
 char report[80];
+#ifdef __DEBUG__                    
 char floatBuf1[16], floatBuf2[16], floatBuf3[16], floatBuf4[16], floatBuf5[16], floatBuf6[16];
 #endif
 
@@ -127,7 +128,7 @@ void setup()
 
     pinMode(A4, INPUT);               // use the ADC on A4
 
-    if (USE_GYRO_FOR_HEADING)
+    if (USE_GYRO_FOR_HEADING || USE_GYRO_FOR_PIVOT_TURN)
     {
 //      calibrateMagnetometer();      // far less accurate than the gyro until we can use it for fusion
         calibrateGyro();
@@ -140,9 +141,6 @@ void loop()
    {
       ledYellow(1);
       
-      buzzer.playFromProgramSpace(starting);
-      delay(2000);
-
       resetToOrigin();
       for (uint8_t i = 0; i < waypointPayloadCurrentCount; i++)
       {
@@ -151,7 +149,7 @@ void loop()
            Serial.println(report);
 #endif           
            goToWaypoint((double)waypointPayload[(i*2)], (double)waypointPayload[(i*2)+1]);
-           reportPoseSnapshots();
+//         reportPoseSnapshots();
       }
 
       buzzer.playFromProgramSpace(finished);
@@ -216,7 +214,7 @@ void goToWaypoint(double x, double y)
             dt = (millis() - lastMillis) / 1000.0;
 
             // Recalculate reference heading every now and then as our current position changes
-            if ((iteration % 10 == 0) && PERIODIC_REFERENCE_HEADING_RESET)
+            if (PERIODIC_REFERENCE_HEADING_RESET && (iteration % 10 == 0))
             {
                 referencePose.heading = getHeading(referencePose.x, referencePose.y, currentPose.x, currentPose.y, currentPose.heading);
 
@@ -308,7 +306,7 @@ void goToWaypoint(double x, double y)
 
         if (PIVOT_TURN && ((headingError > ((2*M_PI) / PIVOT_TURN_THRESHOLD)) || (headingError < -((2*M_PI) / PIVOT_TURN_THRESHOLD))))
         {
-            if (USE_GYRO_FOR_HEADING)
+            if (USE_GYRO_FOR_PIVOT_TURN)
             {
                 correctHeadingWithPivotTurnGyro(headingError);
             }
@@ -335,7 +333,7 @@ void goToWaypoint(double x, double y)
             headingErrorIntegral = 0.0;
         }
 
-        if ((iteration % 4 == 0) && (poseSnapshotCount < MAX_POSE_SNAPSHOTS))
+        if (false && (iteration % 5 == 0) && (poseSnapshotCount < MAX_POSE_SNAPSHOTS))   // don't poll for distance more often than every 250ms (loop has delay ~50ms)
         {
             recordSnapshot(currentPose.heading, currentPose.x, currentPose.y);
         }
@@ -667,6 +665,8 @@ void reportPoseSnapshots()
             {
                 memset(snapshotBuffer, 0, snapshotBufferSize);
             }
+
+            delay(50);    // don't write too fast
         }
     }
 
@@ -687,6 +687,8 @@ void reportPoseSnapshots()
            Wire.write(snapshotBuffer[j]);
         }
         Wire.endTransmission();
+
+        delay(50);    // don't write too fast
     }    
 
     ledGreen(0);
@@ -910,7 +912,7 @@ void correctHeadingWithPivotTurnGyro(double headingError)
     motors.setSpeeds(0, 0);
 
     updateGyroscopeHeading();
-    double diff, gyroStartAngleRad = gyroAngleRad;
+    double diff, delaySafeHeadingError = 0.75 * headingError, gyroStartAngleRad = gyroAngleRad;
     bool skip;
     int i = 0;
 
@@ -952,10 +954,11 @@ void correctHeadingWithPivotTurnGyro(double headingError)
               diff = ((2*M_PI) - gyroStartAngleRad) + gyroAngleRad;
            }
 
-//           if ((i++ % 5) == 0)
-//           {
-//              recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
-//           }
+           // Only record a snapshot (which requires an ADC read, which can impact timing) during the first 75% of the rotation and even then only every 200ms
+           if (false && (diff < delaySafeHeadingError) && ((i++ % 40) == 0))
+           {
+              recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
+           }
 
 #ifdef __DEBUG__                    
 //           Serial.println(diff);
@@ -993,10 +996,11 @@ void correctHeadingWithPivotTurnGyro(double headingError)
                 diff = -1.0 * (gyroStartAngleRad + ((2*M_PI) - gyroAngleRad)); 
             }
 
-//            if ((i++ % 5) == 0)
-//            {
-//               recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
-//            }
+           // Only record a snapshot (which requires an ADC read, which can impact timing) during the first 75% of the rotation and even then only every 200ms
+           if (false && (diff > delaySafeHeadingError) && ((i++ % 40) == 0))
+           {
+              recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
+           }
 
 #ifdef __DEBUG__                    
 //            Serial.println(diff);
