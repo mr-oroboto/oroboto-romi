@@ -105,8 +105,8 @@ double        gyroAngleDifference = 0;
 double        magnetoAngle;
 double        magnetoAngleRad;
 
-char report[80];
 #ifdef __DEBUG__                    
+char report[80];
 char floatBuf1[16], floatBuf2[16], floatBuf3[16], floatBuf4[16], floatBuf5[16], floatBuf6[16];
 #endif
 
@@ -149,7 +149,7 @@ void loop()
            Serial.println(report);
 #endif           
            goToWaypoint((double)waypointPayload[(i*2)], (double)waypointPayload[(i*2)+1]);
-//         reportPoseSnapshots();
+           reportPoseSnapshots();
       }
 
       buzzer.playFromProgramSpace(finished);
@@ -333,7 +333,7 @@ void goToWaypoint(double x, double y)
             headingErrorIntegral = 0.0;
         }
 
-        if (false && (iteration % 5 == 0) && (poseSnapshotCount < MAX_POSE_SNAPSHOTS))   // don't poll for distance more often than every 250ms (loop has delay ~50ms)
+        if ((iteration % 8 == 0) && (poseSnapshotCount < MAX_POSE_SNAPSHOTS))   // don't poll for distance more often than every 400ms (loop has delay ~50ms)
         {
             recordSnapshot(currentPose.heading, currentPose.x, currentPose.y);
         }
