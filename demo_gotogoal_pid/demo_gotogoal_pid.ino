@@ -114,7 +114,6 @@ const char finished[] PROGMEM = "! L16 V8 cdefgab>cbagfedc";
 const char alarm[]  PROGMEM = "!<c2";
 const char soundOk[] PROGMEM = "v10>>g16>>>c16";
 
-
 /*****************************************************************************************************
  * Entrypoint
  *****************************************************************************************************/
@@ -137,6 +136,8 @@ void loop()
 {
    if (pollForWaypoints())
    {
+      ledYellow(1);
+      
       buzzer.playFromProgramSpace(starting);
       delay(2000);
 
@@ -151,9 +152,11 @@ void loop()
 
       buzzer.playFromProgramSpace(finished);
       delay(2000);
+
+      ledYellow(0);
    }
    
-   delay(500);
+   delay(100);
 }
 
 /*****************************************************************************************************
@@ -317,7 +320,7 @@ void goToWaypoint(double x, double y)
             headingErrorIntegral = 0.0;
         }
 
-        if (iteration % 4 == 0 && poseSnapshotCount < MAX_POSE_SNAPSHOTS)
+        if ((iteration % 4 == 0) && (poseSnapshotCount < MAX_POSE_SNAPSHOTS))
         {
             recordSnapshot(currentPose.heading, currentPose.x, currentPose.y);
         }
@@ -495,12 +498,14 @@ bool pollForWaypoints()
       // Valid payload, either part of an existing waypoint payload, or the start of a new one
       if (waypointsBuffer[0] == I2C_MARKER_PAYLOAD_START && waypointsBuffer[1] == I2C_MARKER_PAYLOAD_START)
       {
-         buzzer.playFromProgramSpace(soundOk);
+         ledRed(1);
+                  
          Serial.println("  - Segment starts new waypoint payload");
 
          if (waypointsBuffer[2] != waypointsBuffer[3] || waypointsBuffer[2] > I2C_WAYPOINTS_MAX)
          {
             Serial.println("  - ERROR: mismatched payload count indicator");
+            ledRed(0);
          }
          else
          {
@@ -521,6 +526,8 @@ bool pollForWaypoints()
          if ( ! waypointPayloadInProgress)
          {
             Serial.println("  - Segment is a payload extension but no payload build is in progress, ignoring");
+            ledRed(0);
+            
             return false;
          }
          else
@@ -539,6 +546,7 @@ bool pollForWaypoints()
       {
           Serial.println("  - Waypoint payload is full, ignoring further waypoint data");
           receivedFullPayload = true; 
+          ledRed(0);
       }
    }
    
@@ -563,6 +571,7 @@ void reportPoseSnapshots()
 {
     snprintf_P(report, sizeof(report), PSTR("Reporting %d pose snapshots:"), poseSnapshotCount);      
     Serial.println(report);  
+    ledGreen(1);
 
     unsigned char snapshotBuffer[(I2C_SNAPSHOTS_PER_SEGMENT * I2C_SNAPSHOT_SIZE) + 2];           // 1 snapshot + header / trailer markers
     size_t snapshotBufferSize = sizeof(snapshotBuffer);
@@ -625,6 +634,8 @@ void reportPoseSnapshots()
         }
         Wire.endTransmission();
     }    
+
+    ledGreen(0);
 }
 
 
@@ -633,11 +644,14 @@ void reportPoseSnapshots()
  */
 void recordSnapshot(double heading, double x, double y)
 {
-    poseSnapshots[poseSnapshotCount].heading = heading;
-    poseSnapshots[poseSnapshotCount].x = x;
-    poseSnapshots[poseSnapshotCount].y = y;
-    poseSnapshots[poseSnapshotCount].distanceToObstacle = getSonarRangedDistance();
-    poseSnapshotCount++;          
+    if (poseSnapshotCount < MAX_POSE_SNAPSHOTS)
+    {
+        poseSnapshots[poseSnapshotCount].heading = heading;
+        poseSnapshots[poseSnapshotCount].x = x;
+        poseSnapshots[poseSnapshotCount].y = y;
+        poseSnapshots[poseSnapshotCount].distanceToObstacle = getSonarRangedDistance();
+        poseSnapshotCount++;          
+    }
 }
 
 
@@ -872,12 +886,12 @@ void correctHeadingWithPivotTurnGyro(double headingError)
               diff = ((2*M_PI) - gyroStartAngleRad) + gyroAngleRad;
            }
 
-           if ((i++ % 5) == 0)
-           {
-              recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
-           }
+//           if ((i++ % 5) == 0)
+//           {
+//              recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
+//           }
            
-           Serial.println(diff);
+//           Serial.println(diff);
         }
         while (skip || (diff < headingError));
     }
@@ -909,12 +923,12 @@ void correctHeadingWithPivotTurnGyro(double headingError)
                 diff = -1.0 * (gyroStartAngleRad + ((2*M_PI) - gyroAngleRad)); 
             }
 
-            if ((i++ % 5) == 0)
-            {
-               recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
-            }
+//            if ((i++ % 5) == 0)
+//            {
+//               recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
+//            }
 
-            Serial.println(diff);
+//            Serial.println(diff);
         }
         while (skip || (diff > headingError));
     }
