@@ -104,8 +104,10 @@ double        gyroAngleDifference = 0;
 double        magnetoAngle;
 double        magnetoAngleRad;
 
+#ifdef __DEBUG__                    
 char report[80];
 char floatBuf1[16], floatBuf2[16], floatBuf3[16], floatBuf4[16], floatBuf5[16], floatBuf6[16];
+#endif
 
 const char encoderErrorLeft[]  PROGMEM = "!<c2";
 const char encoderErrorRight[] PROGMEM = "!<e2";
@@ -144,8 +146,10 @@ void loop()
       resetToOrigin();
       for (uint8_t i = 0; i < waypointPayloadCurrentCount; i++)
       {
+#ifdef __DEBUG__
            snprintf_P(report, sizeof(report), PSTR("waypoint[%d]: (%d,%d)"), i, waypointPayload[(i*2)], waypointPayload[(i*2)+1]);    
            Serial.println(report);
+#endif           
            goToWaypoint((double)waypointPayload[(i*2)], (double)waypointPayload[(i*2)+1]);
            reportPoseSnapshots();
       }
@@ -184,10 +188,12 @@ void goToWaypoint(double x, double y)
     headingErrorPrev = 0.0;
     headingErrorIntegral = 0.0;
 
+#ifdef __DEBUG__
     snprintf_P(report, sizeof(report), PSTR("************************ WAYPOINT (%s,%s) ************************"), ftoa(floatBuf1, x), ftoa(floatBuf2, y));    
     Serial.println(report);      
     snprintf_P(report, sizeof(report), PSTR("to (%s, %s) from pose (%s, %s head [%s])"), ftoa(floatBuf1, x), ftoa(floatBuf2, y), ftoa(floatBuf3, currentPose.x), ftoa(floatBuf4, currentPose.y), ftoa(floatBuf5, currentPose.heading));    
     Serial.println(report);      
+#endif
 
     referencePose.x = x;
     referencePose.y = y;
@@ -213,15 +219,20 @@ void goToWaypoint(double x, double y)
             if ((iteration % 10 == 0) && PERIODIC_REFERENCE_HEADING_RESET)
             {
                 referencePose.heading = getHeading(referencePose.x, referencePose.y, currentPose.x, currentPose.y, currentPose.heading);
+
+#ifdef __DEBUG__                
                 snprintf_P(report, sizeof(report), PSTR("corrected reference heading to [%s])"), ftoa(floatBuf1, referencePose.heading));    
                 Serial.println(report);      
+#endif                
             }
         }
 
+#ifdef __DEBUG__
 //      snprintf_P(report, sizeof(report), PSTR("[%3d] to (%s, %s, head [%s]) dist: %s"), iteration, ftoa(floatBuf1, referencePose.x), ftoa(floatBuf2, referencePose.y), ftoa(floatBuf3, referencePose.heading), ftoa(floatBuf4, targetVectorMagnitudeInitial)); 
 //      Serial.println(report);      
 //      snprintf_P(report, sizeof(report), PSTR("   was (%s, %s, head [%s]) distTgt[%s]"), ftoa(floatBuf1, currentPose.x), ftoa(floatBuf2, currentPose.y), ftoa(floatBuf3, currentPose.heading), ftoa(floatBuf4, targetVectorMagnitudeLast));    
 //      Serial.println(report);      
+#endif
 
         int16_t countsLeft  = encoders.getCountsAndResetLeft();         // 1440 per revolution = 2*PI*radius cm travel
         int16_t countsRight = encoders.getCountsAndResetRight();
@@ -250,8 +261,10 @@ void goToWaypoint(double x, double y)
             distRight += ((double)countsRight / COUNTS_PER_REVOLUTION) * (2*M_PI * WHEELRADIUS);        // cm travelled by right wheel (total, note the increment)
             distTotal = (distLeft + distRight) / 2.0;                                                   // cm travelled forward (total)
 
+#ifdef __DEBUG__
             snprintf_P(report, sizeof(report), PSTR("[%d] travelled L[%s] R[%s] dist[%s] distPrev[%s]"), iteration, ftoa(floatBuf1, distLeft), ftoa(floatBuf2, distRight), ftoa(floatBuf3, distTotal), ftoa(floatBuf4, distTotalPrev)); 
             Serial.println(report);      
+#endif
 
             // How far have we travelled in this last iteration?
             double distDelta      = distTotal - distTotalPrev;
@@ -281,6 +294,7 @@ void goToWaypoint(double x, double y)
         double headingErrorRaw = referencePose.heading - currentPose.heading;
         headingError = atan2(sin(headingErrorRaw), cos(headingErrorRaw));
 
+#ifdef __DEBUG__
         if (USE_GYRO_FOR_HEADING)
         {
             snprintf_P(report, sizeof(report), PSTR("head curr[%s] gyro[%s / %s deg] ref[%s] err[%s] (raw %s)"), ftoa(floatBuf1, currentPose.heading), ftoa(floatBuf2, gyroAngleRad), ftoa(floatBuf3, gyroAngle), ftoa(floatBuf4, referencePose.heading), ftoa(floatBuf5, headingError), ftoa(floatBuf6, headingErrorRaw));          
@@ -290,6 +304,7 @@ void goToWaypoint(double x, double y)
             snprintf_P(report, sizeof(report), PSTR("head curr[%s] ref[%s] err[%s] (raw %s)"), ftoa(floatBuf1, currentPose.heading), ftoa(floatBuf2, referencePose.heading), ftoa(floatBuf3, headingError), ftoa(floatBuf4, headingErrorRaw));
         }
         Serial.println(report);
+#endif
 
         if (PIVOT_TURN && ((headingError > ((2*M_PI) / PIVOT_TURN_THRESHOLD)) || (headingError < -((2*M_PI) / PIVOT_TURN_THRESHOLD))))
         {
@@ -332,8 +347,10 @@ void goToWaypoint(double x, double y)
             targetVectorMagnitudeInitial = targetVectorMagnitude;        
         }
 
+#ifdef __DEBUG__
         snprintf_P(report, sizeof(report), PSTR("   now (%s, %s) head [%s] err[%s] distTgt[%s]"), ftoa(floatBuf1, currentPose.x), ftoa(floatBuf2, currentPose.y), ftoa(floatBuf3, currentPose.heading), ftoa(floatBuf4, headingError), ftoa(floatBuf5, targetVectorMagnitude));    
         Serial.println(report);      
+#endif
 
         // Give up out of out-of-control situations
         if (iteration != 0)
@@ -366,8 +383,10 @@ void goToWaypoint(double x, double y)
                 {
                     motors.setSpeeds(0, 0);
 
+#ifdef __DEBUG__
                     snprintf_P(report, sizeof(report), PSTR("   !!! ABORT: DISTANCE TO TARGET INCREASED"));    
                     Serial.println(report);      
+#endif
 
                     buzzer.playFromProgramSpace(encoderErrorLeft);
                     delay(500);
@@ -392,16 +411,20 @@ void goToWaypoint(double x, double y)
         {
             approachingTarget = true;
 
+#ifdef __DEBUG__
             snprintf_P(report, sizeof(report), PSTR("   >>> slowing..."));    
             Serial.println(report);      
+#endif
 
             forwardVelocity = VELOCITY_ON_APPROACH;
         }
 
         if (targetVectorMagnitude <= WAYPOINT_PROXIMITY_REACHED)
         {
+#ifdef __DEBUG__          
             snprintf_P(report, sizeof(report), PSTR("   >>> WAYPOINT REACHED <<<"));    
             Serial.println(report);      
+#endif            
             break;
         }
 
@@ -424,14 +447,20 @@ void goToWaypoint(double x, double y)
             if (u > ANGULAR_VELOCITY_SIGNAL_LIMIT)
             {
                 u = ANGULAR_VELOCITY_SIGNAL_LIMIT;
+
+#ifdef __DEBUG__                
                 snprintf_P(report, sizeof(report), PSTR("   !!! Capped angular velocity signal"));    
                 Serial.println(report);      
+#endif                
             }
             else if (u < (-1.0 * ANGULAR_VELOCITY_SIGNAL_LIMIT))
             {
                 u = -1.0 * ANGULAR_VELOCITY_SIGNAL_LIMIT;
+
+#ifdef __DEBUG__                
                 snprintf_P(report, sizeof(report), PSTR("   !!! Capped angular velocity signal"));    
                 Serial.println(report);                      
+#endif                
             }
         }
 
@@ -442,9 +471,11 @@ void goToWaypoint(double x, double y)
         int leftSpeed  = convertVelocityToMotorSpeed(velocityLeft, true);
         int rightSpeed = convertVelocityToMotorSpeed(velocityRight, false); 
 
+#ifdef __DEBUG__
 //      snprintf_P(report, sizeof(report), PSTR("   P[%s] I[%s] D[%s] u[%s] -> required velocities L%s (%4d) R%s (%4d)"), ftoa(floatBuf1, pidP), ftoa(floatBuf2, pidI), ftoa(floatBuf3, pidD), ftoa(floatBuf4, u), ftoa(floatBuf5, velocityLeft), leftSpeed, ftoa(floatBuf6, velocityRight), rightSpeed);    
         snprintf_P(report, sizeof(report), PSTR("   u[%s] required velocities L%s (%4d) R%s (%4d)"), ftoa(floatBuf1, u), ftoa(floatBuf2, velocityLeft), leftSpeed, ftoa(floatBuf3, velocityRight), rightSpeed);    
         Serial.println(report);      
+#endif
 
         motors.setSpeeds(leftSpeed, rightSpeed);
 
@@ -491,7 +522,9 @@ bool pollForWaypoints()
 
    if (startMarker == I2C_MARKER_SEGMENT_START && endMarker == I2C_MARKER_SEGMENT_END)
    {
+#ifdef __DEBUG__    
       Serial.println("Received valid I2C segment");
+#endif      
       buzzer.playFromProgramSpace(soundOk);
       delay(500);
 
@@ -499,12 +532,16 @@ bool pollForWaypoints()
       if (waypointsBuffer[0] == I2C_MARKER_PAYLOAD_START && waypointsBuffer[1] == I2C_MARKER_PAYLOAD_START)
       {
          ledRed(1);
-                  
+
+#ifdef __DEBUG__
          Serial.println("  - Segment starts new waypoint payload");
+#endif
 
          if (waypointsBuffer[2] != waypointsBuffer[3] || waypointsBuffer[2] > I2C_WAYPOINTS_MAX)
          {
+#ifdef __DEBUG__          
             Serial.println("  - ERROR: mismatched payload count indicator");
+#endif            
             ledRed(0);
          }
          else
@@ -512,9 +549,11 @@ bool pollForWaypoints()
             waypointPayloadExpectedCount = waypointsBuffer[2]; 
             waypointPayloadCurrentCount = 0;
             waypointPayloadInProgress = true;
-         
+
+#ifdef __DEBUG__
             snprintf_P(report, sizeof(report), PSTR("  - Expecting %d waypoints"), waypointPayloadExpectedCount);      
             Serial.println(report);  
+#endif
 
             memset(waypointPayload, 0, sizeof(waypointPayload));
             bufferOffset = 4;
@@ -525,15 +564,19 @@ bool pollForWaypoints()
       {
          if ( ! waypointPayloadInProgress)
          {
+#ifdef __DEBUG__
             Serial.println("  - Segment is a payload extension but no payload build is in progress, ignoring");
+#endif            
             ledRed(0);
             
             return false;
          }
+#ifdef __DEBUG__          
          else
          {
             Serial.println("  - Segment is a payload extension");
          }
+#endif            
       }
 
       for (i = 0; i < maxWaypointsPerSegment && waypointPayloadCurrentCount < waypointPayloadExpectedCount; i++, waypointPayloadCurrentCount++)
@@ -544,7 +587,9 @@ bool pollForWaypoints()
 
       if (waypointPayloadCurrentCount == waypointPayloadExpectedCount)
       {
+#ifdef __DEBUG__                  
           Serial.println("  - Waypoint payload is full, ignoring further waypoint data");
+#endif          
           receivedFullPayload = true; 
           ledRed(0);
       }
@@ -569,8 +614,11 @@ bool pollForWaypoints()
  */
 void reportPoseSnapshots()
 {
+#ifdef __DEBUG__            
     snprintf_P(report, sizeof(report), PSTR("Reporting %d pose snapshots:"), poseSnapshotCount);      
     Serial.println(report);  
+#endif
+    
     ledGreen(1);
 
     unsigned char snapshotBuffer[(I2C_SNAPSHOTS_PER_SEGMENT * I2C_SNAPSHOT_SIZE) + 2];           // 1 snapshot + header / trailer markers
@@ -583,9 +631,11 @@ void reportPoseSnapshots()
 
         int8_t  heading = (int8_t)poseSnapshots[i].heading;
         uint8_t headingFloat = (poseSnapshots[i].heading >= 0) ? ((uint8_t)((int)(poseSnapshots[i].heading * 100.0) % 100)) : ((uint8_t)((int)(poseSnapshots[i].heading * -100.0) % 100));
-        
+
+#ifdef __DEBUG__                  
         snprintf_P(report, sizeof(report), PSTR("   Adding snapshot [%d]: (%d,%d at %d.%d) dist %d"), i, (int16_t)poseSnapshots[i].x, (int16_t)poseSnapshots[i].y, heading, headingFloat, (uint16_t)poseSnapshots[i].distanceToObstacle);      
         Serial.println(report);  
+#endif
 
         snapshotBuffer[1+(bufferIndex*8)+0] = (unsigned char)((int16_t)poseSnapshots[i].x >> 8);
         snapshotBuffer[1+(bufferIndex*8)+1] = (unsigned char)((int16_t)poseSnapshots[i].x & 0xFF);
@@ -598,7 +648,9 @@ void reportPoseSnapshots()
 
         if ((I2C_SNAPSHOTS_PER_SEGMENT == 1) || (i % (I2C_SNAPSHOTS_PER_SEGMENT - 1) == 0))
         {
+#ifdef __DEBUG__                    
             Serial.println("   Writing snapshot buffer...");
+#endif
 
             snapshotBuffer[0] = I2C_MARKER_SEGMENT_START;
             snapshotBuffer[snapshotBufferSize-1] = I2C_MARKER_SEGMENT_END;
@@ -620,8 +672,10 @@ void reportPoseSnapshots()
 
     if (i % I2C_SNAPSHOTS_PER_SEGMENT != 0)
     {
+#ifdef __DEBUG__                
         snprintf_P(report, sizeof(report), PSTR("   Writing trailing snapshot buffer with %d snapshots"), i % I2C_SNAPSHOTS_PER_SEGMENT);      
         Serial.println(report);  
+#endif
 
         snapshotBuffer[0] = I2C_MARKER_SEGMENT_START;
         snapshotBuffer[snapshotBufferSize-1] = I2C_MARKER_SEGMENT_END;
@@ -743,11 +797,12 @@ double getHeading(double toX, double toY, double fromX, double fromY, double cur
     double x = toX - fromX;
     double y = toY - fromY;
 
+#ifdef __DEBUG__          
 //  snprintf_P(report, sizeof(report), PSTR("to global   (%s, %s) from (%s, %s head [%s])"), ftoa(floatBuf1, toX), ftoa(floatBuf2, toY), ftoa(floatBuf3, fromX), ftoa(floatBuf4, fromY), ftoa(floatBuf5, currentHeading));    
 //  Serial.println(report);
-
 //  snprintf_P(report, sizeof(report), PSTR("to relative (%s, %s)"), ftoa(floatBuf1, x), ftoa(floatBuf2, y));    
 //  Serial.println(report);
+#endif
 
     if (x <= 0.01 && x >= -0.01)            // x == 0
     {
@@ -759,11 +814,14 @@ double getHeading(double toX, double toY, double fromX, double fromY, double cur
         {
             rad = M_PI / 2.0;
         }
+#ifdef __DEBUG__                    
         else
         {
             snprintf_P(report, sizeof(report), PSTR("-> keeping current heading"));    
             Serial.println(report);      
+            
         }
+#endif        
     }
     else
     {
@@ -802,9 +860,11 @@ void correctHeadingWithPivotTurn(double headingError)
     delay(PIVOT_TURN_SLEEP_MS);
     
     double arcLength = ((headingError / (2*M_PI)) * (2*M_PI*BASERADIUS));
-    
+
+#ifdef __DEBUG__                        
     snprintf_P(report, sizeof(report), PSTR("   CORRECTING [%s] rad, spin arc length [%s]"), ftoa(floatBuf1, headingError), ftoa(floatBuf2, arcLength)); 
     Serial.println(report);      
+#endif
     
     encoders.getCountsAndResetLeft();
     double spinDist = 0.0;
@@ -833,8 +893,10 @@ void correctHeadingWithPivotTurn(double headingError)
     
     motors.setSpeeds(0, 0);
 
+#ifdef __DEBUG__                    
     snprintf_P(report, sizeof(report), PSTR("   CORRECTED arc length [%s]"), ftoa(floatBuf2, spinDist)); 
     Serial.println(report);      
+#endif
     
     delay(PIVOT_TURN_SLEEP_MS);    
 }
@@ -852,8 +914,10 @@ void correctHeadingWithPivotTurnGyro(double headingError)
     bool skip;
     int i = 0;
 
+#ifdef __DEBUG__                    
     snprintf_P(report, sizeof(report), PSTR("   CORRECTING [%s] rad %s, gyroStartAngleRad [%s]"), ftoa(floatBuf1, headingError), ((headingError > 0) ? "CCW" : "CW"), ftoa(floatBuf2, gyroStartAngleRad)); 
     Serial.println(report);      
+#endif
 
     buzzer.playFromProgramSpace(encoderErrorRight);
     delay(PIVOT_TURN_SLEEP_MS);
@@ -872,7 +936,9 @@ void correctHeadingWithPivotTurnGyro(double headingError)
            // Ignore noise, the angle SHOULD be increasing
            if ((fabs(gyroStartAngleRad - gyroAngleRad) < 0.02) || (fabs(gyroStartAngleRad - gyroAngleRad) > ((2*M_PI) - 0.02)))
            {
+#ifdef __DEBUG__                                
 //            Serial.println("Ignoring noise");
+#endif
               skip = true;
               continue;
            }
@@ -890,8 +956,10 @@ void correctHeadingWithPivotTurnGyro(double headingError)
 //           {
 //              recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
 //           }
-           
+
+#ifdef __DEBUG__                    
 //           Serial.println(diff);
+#endif
         }
         while (skip || (diff < headingError));
     }
@@ -909,7 +977,9 @@ void correctHeadingWithPivotTurnGyro(double headingError)
             // Ignore noise, the angle SHOULD be decreasing
             if ((fabs(gyroStartAngleRad - gyroAngleRad) < 0.02) || (fabs(gyroStartAngleRad - gyroAngleRad) > ((2*M_PI) - 0.02)))
             {
+#ifdef __DEBUG__                                  
 //              Serial.println("Ignoring noise");
+#endif
                 skip = true;
                 continue;
             }
@@ -928,15 +998,19 @@ void correctHeadingWithPivotTurnGyro(double headingError)
 //               recordSnapshot(currentPose.heading + diff, currentPose.x, currentPose.y);
 //            }
 
+#ifdef __DEBUG__                    
 //            Serial.println(diff);
+#endif
         }
         while (skip || (diff > headingError));
     }
     
     motors.setSpeeds(0, 0);
 
+#ifdef __DEBUG__                    
     snprintf_P(report, sizeof(report), PSTR("   CORRECTED heading error of [%s], current gyroAngleRad [%s] (diff [%s])"), ftoa(floatBuf1, headingError), ftoa(floatBuf2, gyroAngleRad), ftoa(floatBuf3, diff)); 
     Serial.println(report);      
+#endif    
 
     delay(PIVOT_TURN_SLEEP_MS); 
 }
@@ -953,8 +1027,10 @@ void correctHeadingWithPivotTurnMagnetometer(double headingError)
     double diff, magnetoStartAngleRad = magnetoAngleRad;
     bool skip;
 
+#ifdef __DEBUG__                    
     snprintf_P(report, sizeof(report), PSTR("   CORRECTING [%s] rad %s, magnetoStartAngleRad [%s]"), ftoa(floatBuf1, headingError), ((headingError > 0) ? "CCW" : "CW"), ftoa(floatBuf2, magnetoStartAngleRad)); 
     Serial.println(report);      
+#endif
 
     buzzer.playFromProgramSpace(encoderErrorRight);
     delay(PIVOT_TURN_SLEEP_MS);
@@ -973,7 +1049,9 @@ void correctHeadingWithPivotTurnMagnetometer(double headingError)
            // Ignore noise, the angle SHOULD be increasing
            if ((fabs(magnetoStartAngleRad - magnetoAngleRad) < 0.04) || (fabs(magnetoStartAngleRad - magnetoAngleRad) > ((2*M_PI) - 0.04)))
            {
+#ifdef __DEBUG__                    
 //            Serial.println("Ignoring noise");
+#endif
               skip = true;
               continue;
            }
@@ -987,7 +1065,9 @@ void correctHeadingWithPivotTurnMagnetometer(double headingError)
               diff = ((2*M_PI) - magnetoStartAngleRad) + magnetoAngleRad;
            }
 
+#ifdef __DEBUG__                    
            Serial.println(diff);
+#endif           
         }
         while (skip || (diff < headingError));
     }
@@ -1005,7 +1085,9 @@ void correctHeadingWithPivotTurnMagnetometer(double headingError)
             // Ignore noise, the angle SHOULD be decreasing
             if ((fabs(magnetoStartAngleRad - magnetoAngleRad) < 0.04) || (fabs(magnetoStartAngleRad - magnetoAngleRad) > ((2*M_PI) - 0.04)))
             {
+#ifdef __DEBUG__                                  
 //              Serial.println("Ignoring noise");
+#endif
                 skip = true;
                 continue;
             }
@@ -1019,15 +1101,19 @@ void correctHeadingWithPivotTurnMagnetometer(double headingError)
                 diff = -1.0 * (magnetoStartAngleRad + ((2*M_PI) - magnetoAngleRad)); 
             }
 
+#ifdef __DEBUG__                    
             Serial.println(diff);
+#endif            
         }
         while (skip || (diff > headingError));
     }
     
     motors.setSpeeds(0, 0);
 
+#ifdef __DEBUG__                    
     snprintf_P(report, sizeof(report), PSTR("   CORRECTED heading error of [%s], current magnetoAngleRad [%s] (diff [%s])"), ftoa(floatBuf1, headingError), ftoa(floatBuf2, magnetoAngleRad), ftoa(floatBuf3, diff)); 
     Serial.println(report);      
+#endif
 
     delay(PIVOT_TURN_SLEEP_MS); 
 }
@@ -1183,10 +1269,15 @@ void calibrateGyro()
     delay(5000);                          // give user time to place device at rest
     buzzer.playFromProgramSpace(alarm);
 
+#ifdef __DEBUG__                    
     Serial.println("Calibrating gyroscope ...");
+#endif
+    
     if ( ! imu.init())
     {
+#ifdef __DEBUG__                          
         Serial.println("Failed to detect or initialize IMU, halting.");
+#endif        
         while(1);
     }
 
@@ -1202,7 +1293,10 @@ void calibrateGyro()
     }
 
     gyroOffset = gyroTotal / 1024;        // average across all 1024 samples
+
+#ifdef __DEBUG__                        
     Serial.println("Gyroscope calibration complete");
+#endif
     
     buzzer.playFromProgramSpace(alarm);  
 }
@@ -1216,7 +1310,9 @@ void calibrateMagnetometer()
     delay(5000);                          // give user time to pick up device
     buzzer.playFromProgramSpace(alarm);
 
+#ifdef __DEBUG__                    
     Serial.println("Calibrating compass, please move device around all axes ...");
+#endif
 
     compass.init();
     compass.resetCalibration();
@@ -1229,7 +1325,9 @@ void calibrateMagnetometer()
         calibrationTime += 200;
     }
 
+#ifdef __DEBUG__                    
     Serial.println("Compass calibration complete");
+#endif    
     buzzer.playFromProgramSpace(alarm);
 }
 
@@ -1278,8 +1376,10 @@ double (*waypoints)[2] = waypointsTriangles;
 
 void preprogrammedWaypoints()
 {
+#ifdef __DEBUG__                      
     snprintf_P(report, sizeof(report), PSTR("************************ START ************************"));    
     Serial.println(report);
+#endif
     
     buzzer.playFromProgramSpace(starting);
     delay(2000);
@@ -1290,8 +1390,10 @@ void preprogrammedWaypoints()
         goToWaypoint(waypoints[i][0], waypoints[i][1]);
     }
 
+#ifdef __DEBUG__                    
     snprintf_P(report, sizeof(report), PSTR("************************ END ************************"));    
     Serial.println(report);      
+#endif
 
     buzzer.playFromProgramSpace(finished);
 }
