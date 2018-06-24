@@ -90,7 +90,7 @@ def i2cInterrupt(id, tick):
 
                 print('%d\t%d\t%f\t%d\t%d\t%d' % (x, y, heading, distanceToObstacle, obstacleX, obstacleY))
 
-                msg = '#\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f' % (0, x, y, obstacleX, obstacleY)
+                msg = ('#\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f' % (0, x, y, obstacleX, obstacleY))
                 udp.logToBotlab(msg)
 #           else:
 #             print("read %d bytes for snapshot report, too short!" % b)

@@ -4,8 +4,6 @@ import config
 import i2c
 import udp
 
-UDP_ADDR="192.168.0.12"
-
 def botLabCallback(data):
     dataString = data.decode('ascii')
     points = dataString.split()
@@ -30,5 +28,5 @@ def botLabCallback(data):
 
 if __name__ == '__main__':
     i2c.registerI2CSlave(config.i2cSlaveAddr)
-    udp.listenForBotLab(config.udpBotLabPort, botLabCallback)
+    udp.listenForBotLab(config.udpLocalPort, config.udpBotLabPort, botLabCallback)
     i2c.stopI2CSlave()
