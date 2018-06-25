@@ -11,7 +11,7 @@ transmitSegments = []
 segmentsSent = 0
 
 
-def buildTransmitSegments(waypoints):
+def buildTransmitSegments(waypoints, maxVelocity, pivotTurnSpeed, optionByte1, optionByte2):
     """Builds an array of I2C segments to transmit a list of waypoints to the bot.
 
     :param waypoints: An array of (x,y) tuples specifying the waypoints to visit.
@@ -25,7 +25,17 @@ def buildTransmitSegments(waypoints):
 
     print('Building transmit segments for %d waypoints' % len(waypoints))
 
-    currentSegment = bytearray(struct.pack('>BBBBB', 0xA0, 0xA2, 0XA2, len(waypoints), len(waypoints)))
+    checksum = len(waypoints) + maxVelocity + pivotTurnSpeed + optionByte1 + optionByte2
+
+    for i in range(len(waypoints)):
+        waypoint = waypoints[i]
+        checksum += (waypoint[0] >> 8) & (waypoint[0] & 0xFF)
+        checksum += (waypoint[1] >> 8) & (waypoint[1] & 0xFF)
+
+    currentSegment = bytearray(struct.pack('>BBBBBBBBBB', 0xA0, 0xA2, 0XA2, len(waypoints), maxVelocity, pivotTurnSpeed, optionByte1, optionByte2, checksum, 0xA1))
+    segments.append(currentSegment)
+
+    currentSegment = bytearray(struct.pack('>B', 0xA0))
 
     for i in range(len(waypoints)):
         waypoint = waypoints[i]

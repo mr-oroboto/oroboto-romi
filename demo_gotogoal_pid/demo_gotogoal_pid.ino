@@ -60,11 +60,6 @@
 #define VOLTS_PER_CM VCC / VOLTS_PER_CM_DIVISOR   // 0.003844734251969
 #define ADC_LSB_PER_VOLT 1023 / VCC               // 1023 / 5.0
 
-int16_t waypointPayload[I2C_WAYPOINTS_MAX * 2]; // all the waypoints received via an I2C_CMD_GETWAYPOINTS are stored here
-bool    waypointPayloadInProgress = false;
-uint8_t waypointPayloadCurrentCount = 0;
-uint8_t waypointPayloadExpectedCount = 0;
-
 struct Pose {
   double        x;
   double        y;
@@ -78,6 +73,16 @@ Romi32U4Buzzer    buzzer;
 Romi32U4Motors    motors;
 LSM6              imu;
 QMC5883L          compass;
+
+int16_t waypointPayload[I2C_WAYPOINTS_MAX * 2]; // all the waypoints received via an I2C_CMD_GETWAYPOINTS are stored here
+bool    waypointPayloadInProgress = false;
+uint8_t waypointPayloadCurrentCount = 0;
+uint8_t waypointPayloadExpectedCount = 0;
+uint8_t checksum, checksumComputed;
+
+uint8_t maxVelocity = MAX_VELOCITY;
+uint8_t pivotTurnSpeed = PIVOT_TURN_SPEED;
+bool    enableRanging = true;
 
 struct Pose currentPose;                        // (believed) current position and heading
 struct Pose referencePose;                      // pose of reference waypoint (heading is heading required from currentPose)
@@ -102,17 +107,17 @@ unsigned long gyroLastUpdateMicros = 0; // helps calculate dt for gyro readings 
 double        gyroAngle;
 double        gyroAngleRad;
 double        gyroAngleDifference = 0;
+
+#ifdef ENABLE_MAGNETOMETER
 double        magnetoAngle;
 double        magnetoAngleRad;
+#endif
 
 #ifdef __DEBUG__                    
 char report[80];
-char floatBuf1[16], floatBuf2[16], floatBuf3[16], floatBuf4[16], floatBuf5[16], floatBuf6[16];
+char floatBuf1[16], floatBuf2[16], floatBuf3[16], floatBuf4[16], floatBuf5[16];
 #endif
 
-const char encoderErrorLeft[]  PROGMEM = "!<c2";
-const char encoderErrorRight[] PROGMEM = "!<e2";
-const char starting[] PROGMEM = "! L16 V8 gcdgcdgcdgcd";
 const char finished[] PROGMEM = "! L16 V8 cdefgab>cbagfedc";
 const char alarm[]  PROGMEM = "!<c2";
 const char soundOk[] PROGMEM = "v10>>g16>>>c16";
@@ -130,7 +135,9 @@ void setup()
 
     if (USE_GYRO_FOR_HEADING || USE_GYRO_FOR_PIVOT_TURN)
     {
-//      calibrateMagnetometer();      // far less accurate than the gyro until we can use it for fusion
+#ifdef ENABLE_MAGNETOMETER      
+        calibrateMagnetometer();      // far less accurate than the gyro until we can use it for fusion
+#endif
         calibrateGyro();
     }    
 }
@@ -236,11 +243,11 @@ void goToWaypoint(double x, double y)
         
         if (encoders.checkErrorLeft())
         {
-            buzzer.playFromProgramSpace(encoderErrorLeft);
+            buzzer.playFromProgramSpace(alarm);
         }
         if (encoders.checkErrorRight())
         {
-            buzzer.playFromProgramSpace(encoderErrorRight);
+            buzzer.playFromProgramSpace(alarm);
         }
 
         if (iteration != 0)
@@ -294,7 +301,7 @@ void goToWaypoint(double x, double y)
 #ifdef __DEBUG__
         if (USE_GYRO_FOR_HEADING)
         {
-            snprintf_P(report, sizeof(report), PSTR("head curr[%s] gyro[%s / %s deg] ref[%s] err[%s] (raw %s)"), ftoa(floatBuf1, currentPose.heading), ftoa(floatBuf2, gyroAngleRad), ftoa(floatBuf3, gyroAngle), ftoa(floatBuf4, referencePose.heading), ftoa(floatBuf5, headingError), ftoa(floatBuf6, headingErrorRaw));          
+            snprintf_P(report, sizeof(report), PSTR("head curr[%s] gyro[%s rad] ref[%s] err[%s] (raw %s)"), ftoa(floatBuf1, currentPose.heading), ftoa(floatBuf2, gyroAngleRad), ftoa(floatBuf3, referencePose.heading), ftoa(floatBuf4, headingError), ftoa(floatBuf5, headingErrorRaw));          
         }
         else
         {
@@ -385,14 +392,14 @@ void goToWaypoint(double x, double y)
                     Serial.println(report);      
 #endif
 
-                    buzzer.playFromProgramSpace(encoderErrorLeft);
-                    delay(500);
-                    buzzer.playFromProgramSpace(encoderErrorRight);
-                    delay(500);
-                    buzzer.playFromProgramSpace(encoderErrorLeft);
-                    delay(500);
-                    buzzer.playFromProgramSpace(encoderErrorRight);
-                    delay(500);
+                    buzzer.playFromProgramSpace(alarm);
+                    delay(200);
+                    buzzer.playFromProgramSpace(alarm);
+                    delay(200);
+                    buzzer.playFromProgramSpace(alarm);
+                    delay(200);
+                    buzzer.playFromProgramSpace(alarm);
+                    delay(200);
                     break;                  
                 }
             }
@@ -402,7 +409,7 @@ void goToWaypoint(double x, double y)
             }
         }
         
-        double forwardVelocity = MAX_VELOCITY;
+        double forwardVelocity = maxVelocity;
 
         if (targetVectorMagnitude < WAYPOINT_PROXIMITY_APPROACHING || approachingTarget)
         {
@@ -528,13 +535,15 @@ bool pollForWaypoints()
       // Valid payload, either part of an existing waypoint payload, or the start of a new one
       if (waypointsBuffer[0] == I2C_MARKER_PAYLOAD_START && waypointsBuffer[1] == I2C_MARKER_PAYLOAD_START)
       {
+         uint8_t optionByte1, optionByte2;
+         
          ledRed(1);
 
 #ifdef __DEBUG__
          Serial.println("  - Segment starts new waypoint payload");
 #endif
 
-         if (waypointsBuffer[2] != waypointsBuffer[3] || waypointsBuffer[2] > I2C_WAYPOINTS_MAX)
+         if (waypointsBuffer[2] == 0 || waypointsBuffer[2] > I2C_WAYPOINTS_MAX)
          {
 #ifdef __DEBUG__          
             Serial.println("  - ERROR: mismatched payload count indicator");
@@ -544,17 +553,25 @@ bool pollForWaypoints()
          else
          {
             waypointPayloadExpectedCount = waypointsBuffer[2]; 
+            maxVelocity = waypointsBuffer[3];
+            pivotTurnSpeed = waypointsBuffer[4];
+            optionByte1 = waypointsBuffer[5];
+            optionByte2 = waypointsBuffer[6];
+            checksum = waypointsBuffer[7];
+            checksumComputed = waypointPayloadExpectedCount + maxVelocity + pivotTurnSpeed + optionByte1 + optionByte2;
+
             waypointPayloadCurrentCount = 0;
             waypointPayloadInProgress = true;
+            enableRanging = (bool)optionByte1;
 
 #ifdef __DEBUG__
-            snprintf_P(report, sizeof(report), PSTR("  - Expecting %d waypoints"), waypointPayloadExpectedCount);      
+            snprintf_P(report, sizeof(report), PSTR("  - Expecting %d waypoints (maxVelocity: %d, pivotTurnSpeed: %d, option1: %x, option2: %x, checksum: %x)"), waypointPayloadExpectedCount, maxVelocity, pivotTurnSpeed, optionByte1, optionByte2, checksum);      
             Serial.println(report);  
 #endif
 
             memset(waypointPayload, 0, sizeof(waypointPayload));
-            bufferOffset = 4;
-            maxWaypointsPerSegment = 1;
+
+            return false;  // expecting another segment with the first (and next) waypoints
          }
       }
       else
@@ -578,16 +595,33 @@ bool pollForWaypoints()
 
       for (i = 0; i < maxWaypointsPerSegment && waypointPayloadCurrentCount < waypointPayloadExpectedCount; i++, waypointPayloadCurrentCount++)
       {
-          waypointPayload[(waypointPayloadCurrentCount * sizeof(int16_t))]   = (waypointsBuffer[bufferOffset + (i * I2C_WAYPOINT_SIZE)] << 8) | waypointsBuffer[bufferOffset + (i * I2C_WAYPOINT_SIZE) + 1];
-          waypointPayload[(waypointPayloadCurrentCount * sizeof(int16_t))+1] = (waypointsBuffer[bufferOffset + (i * I2C_WAYPOINT_SIZE) + 2] << 8) | waypointsBuffer[bufferOffset + (i * I2C_WAYPOINT_SIZE) + 3];
+          int16_t x = (waypointsBuffer[bufferOffset + (i * I2C_WAYPOINT_SIZE)] << 8) | waypointsBuffer[bufferOffset + (i * I2C_WAYPOINT_SIZE) + 1];
+          int16_t y = (waypointsBuffer[bufferOffset + (i * I2C_WAYPOINT_SIZE) + 2] << 8) | waypointsBuffer[bufferOffset + (i * I2C_WAYPOINT_SIZE) + 3];
+
+          waypointPayload[(waypointPayloadCurrentCount * sizeof(int16_t))]   = x;
+          waypointPayload[(waypointPayloadCurrentCount * sizeof(int16_t))+1] = y;
+
+          checksumComputed += ((x >> 8) & (x & 0xFF));
+          checksumComputed += ((y >> 8) & (y & 0xFF));
       }
 
       if (waypointPayloadCurrentCount == waypointPayloadExpectedCount)
       {
 #ifdef __DEBUG__                  
           Serial.println("  - Waypoint payload is full, ignoring further waypoint data");
-#endif          
-          receivedFullPayload = true; 
+#endif    
+          if (checksum == checksumComputed)
+          {
+              receivedFullPayload = true; 
+          }
+          else
+          {
+#ifdef __DEBUG__                  
+              snprintf_P(report, sizeof(report), PSTR("  - Invalid checksum [%x] expected [%x])"), checksumComputed, checksum);      
+              Serial.println(report);
+#endif                
+          }
+
           ledRed(0);
       }
    }
@@ -611,6 +645,14 @@ bool pollForWaypoints()
  */
 void reportPoseSnapshots()
 {
+    // The last snapshot is always our current position
+    if (poseSnapshotCount >= MAX_POSE_SNAPSHOTS)
+    {
+        poseSnapshotCount--;
+    }
+
+    recordSnapshot(currentPose.heading, currentPose.x, currentPose.y);
+
 #ifdef __DEBUG__            
     snprintf_P(report, sizeof(report), PSTR("Reporting %d pose snapshots:"), poseSnapshotCount);      
     Serial.println(report);  
@@ -704,7 +746,16 @@ void recordSnapshot(double heading, double x, double y)
         poseSnapshots[poseSnapshotCount].heading = heading;
         poseSnapshots[poseSnapshotCount].x = x;
         poseSnapshots[poseSnapshotCount].y = y;
-        poseSnapshots[poseSnapshotCount].distanceToObstacle = getSonarRangedDistance();
+
+        if (enableRanging)
+        {
+            poseSnapshots[poseSnapshotCount].distanceToObstacle = getSonarRangedDistance();        
+        }
+        else
+        {
+            poseSnapshots[poseSnapshotCount].distanceToObstacle = 0;                  
+        }
+        
         poseSnapshotCount++;          
     }
 }
@@ -857,7 +908,6 @@ double getHeading(double toX, double toY, double fromX, double fromY, double cur
 void correctHeadingWithPivotTurn(double headingError)
 {
     motors.setSpeeds(0, 0);
-    buzzer.playFromProgramSpace(encoderErrorRight);
     delay(PIVOT_TURN_SLEEP_MS);
     
     double arcLength = ((headingError / (2*M_PI)) * (2*M_PI*BASERADIUS));
@@ -874,12 +924,12 @@ void correctHeadingWithPivotTurn(double headingError)
     if (headingError > 0)
     {
         // left backwards, right forwards (counter clockwise ("left")): radians are positive CCW
-        motors.setSpeeds(-1 * PIVOT_TURN_SPEED, PIVOT_TURN_SPEED); 
+        motors.setSpeeds(-1 * pivotTurnSpeed, pivotTurnSpeed); 
     }
     else
     {
         // left forwards, right backwards (clockwise, ("right"))
-        motors.setSpeeds(PIVOT_TURN_SPEED, -1 * PIVOT_TURN_SPEED);
+        motors.setSpeeds(pivotTurnSpeed, -1 * pivotTurnSpeed);
     }
     
     while (spinDist < arcLength)
@@ -920,13 +970,12 @@ void correctHeadingWithPivotTurnGyro(double headingError)
     Serial.println(report);      
 #endif
 
-    buzzer.playFromProgramSpace(encoderErrorRight);
     delay(PIVOT_TURN_SLEEP_MS);
     
     if (headingError > 0)
     {
         // left backwards, right forwards (counter clockwise ("left")): radians are positive CCW
-        motors.setSpeeds(-1 * PIVOT_TURN_SPEED, PIVOT_TURN_SPEED); 
+        motors.setSpeeds(-1 * pivotTurnSpeed, pivotTurnSpeed); 
 
         do
         {
@@ -968,7 +1017,7 @@ void correctHeadingWithPivotTurnGyro(double headingError)
     else
     {
         // left forwards, right backwards (clockwise, ("right"))
-        motors.setSpeeds(PIVOT_TURN_SPEED, -1 * PIVOT_TURN_SPEED);
+        motors.setSpeeds(pivotTurnSpeed, -1 * pivotTurnSpeed);
 
         do
         {
@@ -1019,6 +1068,7 @@ void correctHeadingWithPivotTurnGyro(double headingError)
 }
 
 
+#ifdef ENABLE_MAGNETOMETER
 /**
  * Our heading is so wrong we should correct with a pivot (on-the-spot) rotation rather than PID (using magnetometer).
  */
@@ -1035,13 +1085,12 @@ void correctHeadingWithPivotTurnMagnetometer(double headingError)
     Serial.println(report);      
 #endif
 
-    buzzer.playFromProgramSpace(encoderErrorRight);
     delay(PIVOT_TURN_SLEEP_MS);
     
     if (headingError > 0)
     {
         // left backwards, right forwards (counter clockwise ("left")): radians are positive CCW
-        motors.setSpeeds(-1 * PIVOT_TURN_SPEED, PIVOT_TURN_SPEED); 
+        motors.setSpeeds(-1 * pivotTurnSpeed, pivotTurnSpeed); 
 
         do
         {
@@ -1077,7 +1126,7 @@ void correctHeadingWithPivotTurnMagnetometer(double headingError)
     else
     {
         // left forwards, right backwards (clockwise, ("right"))
-        motors.setSpeeds(PIVOT_TURN_SPEED, -1 * PIVOT_TURN_SPEED);
+        motors.setSpeeds(pivotTurnSpeed, -1 * pivotTurnSpeed);
 
         do
         {
@@ -1120,6 +1169,7 @@ void correctHeadingWithPivotTurnMagnetometer(double headingError)
 
     delay(PIVOT_TURN_SLEEP_MS); 
 }
+#endif
 
 
 /**
@@ -1127,7 +1177,7 @@ void correctHeadingWithPivotTurnMagnetometer(double headingError)
  */
 int convertVelocityToMotorSpeed(double velocity, double left)
 {
-    int speed = (velocity / MAX_VELOCITY) * 300;
+    int speed = (velocity / maxVelocity) * 300;
 
     if (CORRECT_MOTOR_BIASES)
     {
@@ -1217,6 +1267,7 @@ void updateGyroscopeHeading()
 }
 
 
+#ifdef ENABLE_MAGNETOMETER
 /**
  * Update magnetometer heading (blocks until magnetometer ready)
  * 
@@ -1234,6 +1285,7 @@ void updateMagnetometerHeading()
     magnetoAngle = 360 - compass.readHeading();
     magnetoAngleRad = magnetoAngle * ((2*M_PI) / 360.0);
 }
+#endif
 
  
 /**
@@ -1305,6 +1357,7 @@ void calibrateGyro()
 }
 
 
+#ifdef ENABLE_MAGNETOMETER
 /**
  * Calibrate magnetometer
  */
@@ -1333,6 +1386,7 @@ void calibrateMagnetometer()
 #endif    
     buzzer.playFromProgramSpace(alarm);
 }
+#endif
 
 
 /****************************************************************************************************************
@@ -1384,9 +1438,6 @@ void preprogrammedWaypoints()
     Serial.println(report);
 #endif
     
-    buzzer.playFromProgramSpace(starting);
-    delay(2000);
-
     resetToOrigin();
     for (int i = 0; i < NUM_WAYPOINTS; i++)
     {
@@ -1441,6 +1492,7 @@ void gyroBasedOrientation()
     correctHeadingWithPivotTurnGyro(1.57);  
 }
 
+#ifdef ENABLE_MAGNETOMETER
 void magnetometerBasedOrientation() 
 {
     resetToOrigin();
@@ -1480,5 +1532,5 @@ void magnetometerBasedOrientation()
     resetDistancesForNewWaypoint();
     correctHeadingWithPivotTurnMagnetometer(1.57);  
 }
-
+#endif
 
