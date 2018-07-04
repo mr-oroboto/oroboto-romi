@@ -22,12 +22,18 @@ def listenForBotLab(listenPort, useBotLabPort, botName, botColour, callback):
             botLabAddr = addr[0]
 
         if len(data) == 4 and data.decode('ascii') == 'ping':
-            sendToAddr(botLabAddr, botLabPort, bytes('pong ' + botName + ' ' + botColour, 'ascii'), 0)
+            sendPong(botLabAddr, botLabPort, botName, botColour)
         else:
             callback(data)
 
+def sendPong(botLabAddr, botLabPort, botName, botColour):
+    if botLabAddr == '255.255.255.255':
+        sendToAddr(botLabAddr, botLabPort, bytes('pong ' + botName + ' ' + botColour, 'ascii'), True)
+    else:
+        sendToAddr(botLabAddr, botLabPort, bytes('pong ' + botName + ' ' + botColour, 'ascii'), False)
 
-def logToBotlab(msg):
+
+def logToBotlab(msg, msgIsPoseSnapshot):
     """Sends a log back to botLab.
 
     :param msg: The log message.
@@ -35,6 +41,8 @@ def logToBotlab(msg):
 
     global botLabAddr
     global botLabPort
+
+    msg = '# ' + msg if msgIsPoseSnapshot else '> ' + msg
 
     if botLabAddr:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
