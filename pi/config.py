@@ -1,3 +1,6 @@
+name = 'oroboto'
+colour = 'yellow'
+
 udpBotLabPort = 50607
 udpLocalPort = 50608
 

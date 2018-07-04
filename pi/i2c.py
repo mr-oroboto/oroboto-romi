@@ -95,12 +95,17 @@ def i2cInterrupt(id, tick):
                 else:
                     heading -= (headingFloat / 100.0)
 
-                obstacleX = x + (distanceToObstacle * math.cos(heading))
-                obstacleY = y + (distanceToObstacle * math.sin(heading))
+                # If ranging was disabled the distance to obstacle reported will always be 0
+                if distanceToObstacle:
+                    obstacleX = x + (distanceToObstacle * math.cos(heading))
+                    obstacleY = y + (distanceToObstacle * math.sin(heading))
+                else:
+                    obstacleX = 0    # ensure that botlab doesn't draw any obstacles, we weren't measuring them
+                    obstacleY = 0    # ensure that botlab doesn't draw any obstacles, we weren't measuring them
 
                 print('%d\t%d\t%f\t%d\t%d\t%d' % (x, y, heading, distanceToObstacle, obstacleX, obstacleY))
 
-                msg = ('#\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f' % (0, x, y, obstacleX, obstacleY))
+                msg = ('#\t%.2f\t%d\t%d\t%.2f\t%d\t%d' % (0, x, y, heading, obstacleX, obstacleY))
                 udp.logToBotlab(msg)
 #           else:
 #             print("read %d bytes for snapshot report, too short!" % b)

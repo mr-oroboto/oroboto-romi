@@ -32,6 +32,8 @@ def botLabCallback(data):
         waypoint = (int(points[i*2]), int(points[(i*2)+1]))
         waypoints.append(waypoint)
 
+    print('Executing transit between waypoints at maxVelocity [%d], pivotTurnSpeed [%d], optionByte1 [%2X], optionByte2 [%2X]' % (maxVelocity, pivotTurnSpeed, optionByte1, optionByte2))
+
     transmitSegments = i2c.buildTransmitSegments(waypoints, maxVelocity, pivotTurnSpeed, optionByte1, optionByte2)
     i2c.registerTransmitSegments(transmitSegments)
 
@@ -39,5 +41,5 @@ def botLabCallback(data):
 
 if __name__ == '__main__':
     i2c.registerI2CSlave(config.i2cSlaveAddr)
-    udp.listenForBotLab(config.udpLocalPort, config.udpBotLabPort, botLabCallback)
+    udp.listenForBotLab(config.udpLocalPort, config.udpBotLabPort, config.name, config.colour, botLabCallback)
     i2c.stopI2CSlave()

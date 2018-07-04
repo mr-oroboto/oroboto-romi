@@ -6,7 +6,7 @@ botLabAddr = 0
 botLabPort = 0
 
 
-def listenForBotLab(listenPort, useBotLabPort, callback):
+def listenForBotLab(listenPort, useBotLabPort, botName, botColour, callback):
     global botLabAddr
     global botLabPort
 
@@ -22,7 +22,7 @@ def listenForBotLab(listenPort, useBotLabPort, callback):
             botLabAddr = addr[0]
 
         if len(data) == 4 and data.decode('ascii') == 'ping':
-            sendToAddr(botLabAddr, botLabPort, bytes('pong', 'ascii'), 0)
+            sendToAddr(botLabAddr, botLabPort, bytes('pong ' + botName + ' ' + botColour, 'ascii'), 0)
         else:
             callback(data)
 
