@@ -9,7 +9,9 @@
 
 #define MAX_VELOCITY         2                  // cm/s (known good max velocity is "2")
 #define VELOCITY_ON_APPROACH 1.0
-#define CORRECT_MOTOR_BIASES false              // left and right motor may have different input response curves, correct for them?
+#define MIN_SPEED            20
+#define MAX_SPEED            300                // on-floor tests show 100 =~ 26.13cm/s, 200 =~ 44.24 cm/s, 300 =~ 65.49cm/s
+#define MAX_SPEED_CM_PER_SEC 65.49
 
 #define WHEELBASE        14.9225                // cm
 #define BASERADIUS       7.46125                // cm
@@ -25,10 +27,10 @@
 
 #define ABORT_WAYPOINT_AFTER_DISTANCE_INCREASES false   // true
 #define DISTANCE_INCREASE_ITERATION_THRESHOLD 1
-#define DISTANCE_INCREASE_DRIFT_FROM_INITIAL_VECTOR_THRESHOLD 0.25
+#define DISTANCE_INCREASE_DRIFT_FROM_INITIAL_VECTOR_THRESHOLD 0.25    // used when ABORT_WAYPOINT_AFTER_DISTANCE_INCREASES is false
 
 #define WAYPOINT_PROXIMITY_APPROACHING 5.0      // was 10.0
-#define WAYPOINT_PROXIMITY_REACHED 1.0          // was 3.0
+#define WAYPOINT_PROXIMITY_REACHED 2.0          // was 3.0
 #define POST_WAYPOINT_SLEEP_MS 300              // known good sleep is 1000
 
 #define PERIODIC_REFERENCE_HEADING_RESET false  // should we periodically recalculate required reference heading during waypoint finding?
@@ -54,6 +56,9 @@
 #define I2C_MARKER_SEGMENT_END 0xA1
 #define I2C_MARKER_PAYLOAD_START 0xA2
 #define I2C_MARKER_PAYLOAD_END 0xA3
+
+#define OPTION1_ENABLE_RANGING 0x01
+#define OPTION1_CALIBRATE_MOTORS 0xB0
 
 #define VCC 5.0
 #define VOLTS_PER_CM_DIVISOR 1300.48              // 512.0 * 2.54 (from datasheet)
@@ -82,6 +87,7 @@ uint8_t checksum, checksumComputed;
 
 uint8_t maxVelocity = MAX_VELOCITY;
 uint8_t pivotTurnSpeed = PIVOT_TURN_SPEED;
+uint8_t optionByte1, optionByte2;
 bool    enableRanging = true;
 
 struct Pose currentPose;                        // (believed) current position and heading
@@ -112,6 +118,11 @@ double        gyroAngleDifference = 0;
 double        magnetoAngle;
 double        magnetoAngleRad;
 #endif
+
+float * motorCalibrationRightToLeftRatio = NULL;
+int16_t motorCalibrationBuckets[] = {30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140};     // Motor speed range is -300 to 300 (reverse to forward)
+uint8_t motorCalibrationAdjustedBuckets = 0;
+uint8_t motorCalibrationBucketCount = sizeof(motorCalibrationBuckets) / sizeof(int16_t);
 
 #ifdef __DEBUG__                    
 char report[80];
@@ -472,8 +483,10 @@ void goToWaypoint(double x, double y)
         velocityRight = ((2.0 * forwardVelocity) + (u * WHEELBASE)) / (2.0 * WHEELRADIUS);    // cm/s
         velocityLeft  = ((2.0 * forwardVelocity) - (u * WHEELBASE)) / (2.0 * WHEELRADIUS);    // cm/s
 
-        int leftSpeed  = convertVelocityToMotorSpeed(velocityLeft, true);
-        int rightSpeed = convertVelocityToMotorSpeed(velocityRight, false); 
+        int leftSpeed  = convertVelocityToMotorSpeed(velocityLeft);
+        int rightSpeed = convertVelocityToMotorSpeed(velocityRight); 
+
+        leftSpeed = getCalibratedLeftMotorSpeed(leftSpeed);
 
 #ifdef __DEBUG__
 //      snprintf_P(report, sizeof(report), PSTR("   P[%s] I[%s] D[%s] u[%s] -> required velocities L%s (%4d) R%s (%4d)"), ftoa(floatBuf1, pidP), ftoa(floatBuf2, pidI), ftoa(floatBuf3, pidD), ftoa(floatBuf4, u), ftoa(floatBuf5, velocityLeft), leftSpeed, ftoa(floatBuf6, velocityRight), rightSpeed);    
@@ -535,18 +548,16 @@ bool pollForWaypoints()
       // Valid payload, either part of an existing waypoint payload, or the start of a new one
       if (waypointsBuffer[0] == I2C_MARKER_PAYLOAD_START && waypointsBuffer[1] == I2C_MARKER_PAYLOAD_START)
       {
-         uint8_t optionByte1, optionByte2;
-         
          ledRed(1);
 
 #ifdef __DEBUG__
-         Serial.println("  - Segment starts new waypoint payload");
+         Serial.println(" - Segment starts new waypoint payload");
 #endif
 
          if (waypointsBuffer[2] == 0 || waypointsBuffer[2] > I2C_WAYPOINTS_MAX)
          {
 #ifdef __DEBUG__          
-            Serial.println("  - ERROR: mismatched payload count indicator");
+            Serial.println(" - ERROR: mismatched payload count indicator");
 #endif            
             ledRed(0);
          }
@@ -562,10 +573,9 @@ bool pollForWaypoints()
 
             waypointPayloadCurrentCount = 0;
             waypointPayloadInProgress = true;
-            enableRanging = (bool)optionByte1;
 
 #ifdef __DEBUG__
-            snprintf_P(report, sizeof(report), PSTR("  - Expecting %d waypoints (maxVelocity: %d, pivotTurnSpeed: %d, option1: %x, option2: %x, checksum: %x)"), waypointPayloadExpectedCount, maxVelocity, pivotTurnSpeed, optionByte1, optionByte2, checksum);      
+            snprintf_P(report, sizeof(report), PSTR(" - Expect %d waypoints (maxVelocity:%d, pivotTurnSpeed:%d, o1:%x, o2:%x, chk:%x)"), waypointPayloadExpectedCount, maxVelocity, pivotTurnSpeed, optionByte1, optionByte2, checksum);      
             Serial.println(report);  
 #endif
 
@@ -579,7 +589,7 @@ bool pollForWaypoints()
          if ( ! waypointPayloadInProgress)
          {
 #ifdef __DEBUG__
-            Serial.println("  - Segment is a payload extension but no payload build is in progress, ignoring");
+            Serial.println(" - Segment is a payload extension but no payload build is in progress, ignoring");
 #endif            
             ledRed(0);
             
@@ -588,7 +598,7 @@ bool pollForWaypoints()
 #ifdef __DEBUG__          
          else
          {
-            Serial.println("  - Segment is a payload extension");
+            Serial.println(" - Segment is a payload extension");
          }
 #endif            
       }
@@ -608,16 +618,24 @@ bool pollForWaypoints()
       if (waypointPayloadCurrentCount == waypointPayloadExpectedCount)
       {
 #ifdef __DEBUG__                  
-          Serial.println("  - Waypoint payload is full, ignoring further waypoint data");
+          Serial.println(" - Waypoint payload is full, ignoring further waypoint data");
 #endif    
           if (checksum == checksumComputed)
           {
+              enableRanging = (optionByte1 == OPTION1_ENABLE_RANGING);
               receivedFullPayload = true; 
+
+              // Overrides
+              if (optionByte1 == OPTION1_CALIBRATE_MOTORS)
+              {
+                 calibrateMotors(2);
+                 receivedFullPayload = false;  // ignore the waypoints, we're just calibrating  
+              }
           }
           else
           {
 #ifdef __DEBUG__                  
-              snprintf_P(report, sizeof(report), PSTR("  - Invalid checksum [%x] expected [%x])"), checksumComputed, checksum);      
+              snprintf_P(report, sizeof(report), PSTR(" - Invalid checksum [%x] expected [%x])"), checksumComputed, checksum);      
               Serial.println(report);
 #endif                
           }
@@ -1175,54 +1193,70 @@ void correctHeadingWithPivotTurnMagnetometer(double headingError)
 /**
  * Convert velocity expressed in cm/s to a motor speed integer in the range[-300, 300].
  */
-int convertVelocityToMotorSpeed(double velocity, double left)
+int convertVelocityToMotorSpeed(double velocity)
 {
-    int speed = (velocity / maxVelocity) * 300;
+    int speed = (velocity / MAX_SPEED_CM_PER_SEC) * MAX_SPEED;
 
-    if (CORRECT_MOTOR_BIASES)
+    if (speed > 0)
     {
-        if (left)
+        if (speed < MIN_SPEED)
         {
-            if (speed < 0)
-            {
-                speed -= 10;      // bias left, it's always slower to start than right
-                if (speed > -30)
-                {
-                    speed = -30;  
-                }
-            }
-            else
-            {
-                speed += 10;      // bias left          
-  
-                if (speed < 30)
-                {
-                    speed = 30; 
-                }
-            }
+           speed = MIN_SPEED;          
         }
-        else
+        else if (speed > MAX_SPEED)
         {
-            if (speed < 0)
-            {
-                if (speed > -20)
-                {
-                    speed = -20;      
-                }
-            }
-            else
-            {
-                if (speed < 20)
-                {
-                    speed = 20;  
-                }
-            }
+            speed = MAX_SPEED;
         }
+    }
+    else if (speed < 0)
+    {
+       if (speed > (-1 * MIN_SPEED))
+       {
+          speed = -1 * MIN_SPEED;
+       }
+       else if (speed < (-1 * MAX_SPEED))
+       {
+          speed = -1 * MAX_SPEED;
+       }
     }
 
     return speed;
 }
 
+/**
+ * Get the calibrated motor speed for the left motor. 
+ */
+int16_t getCalibratedLeftMotorSpeed(int16_t desiredSpeed)
+{
+   if ( ! motorCalibrationRightToLeftRatio)
+   {
+#ifdef __DEBUG__    
+      Serial.println("Motor calibration has not been performed");
+#endif      
+      return desiredSpeed;
+   }
+   
+   if (desiredSpeed < motorCalibrationBuckets[0] || desiredSpeed > motorCalibrationBuckets[motorCalibrationBucketCount - 1])
+   {
+#ifdef __DEBUG__        
+       snprintf_P(report, sizeof(report), PSTR("No calibration data for speed %d"), desiredSpeed);
+       Serial.println(report); 
+#endif
+
+       return desiredSpeed;
+   }
+
+   // Assume the buckets are equally divided into groups of 10
+   uint8_t bucketNumber = (desiredSpeed - motorCalibrationBuckets[0]) / 10;
+   int16_t leftSpeed = (float)desiredSpeed * motorCalibrationRightToLeftRatio[bucketNumber];
+
+#ifdef __DEBUG__    
+   snprintf_P(report, sizeof(report), PSTR("Using bucket %d (speed: %d) to adjust rightSpeed %d to leftSpeed %d (ratio: %s)"), bucketNumber, motorCalibrationBuckets[bucketNumber], desiredSpeed, leftSpeed, ftoa(floatBuf1, motorCalibrationRightToLeftRatio[bucketNumber]));
+   Serial.println(report); 
+#endif
+
+   return leftSpeed;
+}
 
 /**
  * Update gyroscope heading.
@@ -1388,6 +1422,99 @@ void calibrateMagnetometer()
 }
 #endif
 
+
+/**
+ * Calibrate motor speeds. We will adjust the left motor speed to try and balance it with the right.
+ */
+void calibrateMotors(uint8_t sampleCount) 
+{
+   uint16_t i;
+   uint32_t * leftTotals, * rightTotals;
+
+#ifdef __DEBUG__                    
+   Serial.println("Calibrating motors ...");
+#endif
+
+   motorCalibrationRightToLeftRatio = (float*)malloc(motorCalibrationBucketCount * sizeof(float));
+   leftTotals = (uint32_t*)malloc(motorCalibrationBucketCount * sizeof(uint32_t));
+   rightTotals = (uint32_t*)malloc(motorCalibrationBucketCount * sizeof(uint32_t));
+
+   memset(leftTotals, 0, motorCalibrationBucketCount * sizeof(uint32_t));
+   memset(rightTotals, 0, motorCalibrationBucketCount * sizeof(uint32_t));
+
+   buzzer.playFromProgramSpace(alarm);
+   delay(2000);
+
+   for (i = 0; i < motorCalibrationBucketCount * sampleCount; i++)
+   {
+       uint16_t speedBucket = i % motorCalibrationBucketCount;
+
+       if (speedBucket == 0 && i)
+       {
+          delay(4000);   // delay 4 seconds between samples
+       }
+       else
+       {
+          delay(1000);
+       }
+       
+       encoders.getCountsAndResetLeft();
+       encoders.getCountsAndResetRight();
+       
+       motors.setSpeeds(motorCalibrationBuckets[speedBucket], motorCalibrationBuckets[speedBucket]);
+       delay(3000);
+       motors.setSpeeds(0, 0);
+
+       leftTotals[speedBucket]  += encoders.getCountsAndResetLeft();
+       rightTotals[speedBucket] += encoders.getCountsAndResetRight();
+   }
+
+   // Calculate required adjustment factors
+   for (i = 0; i < motorCalibrationBucketCount; i++)
+   {
+       motorCalibrationRightToLeftRatio[i] = 1.0;
+
+       if (leftTotals[i])
+       {
+           float observedRatio = (float)rightTotals[i] / (float)leftTotals[i];
+
+           // What would left's new speed if using the adjustment factor?
+           int left = (float)motorCalibrationBuckets[i] * observedRatio;
+
+           // We only have integer granularity: if the difference between the two speeds is more than the adjustment factor, don't adjust or we'll overcook it.
+           float correctedDiff = abs(left - motorCalibrationBuckets[i]) / (float)motorCalibrationBuckets[i];
+           float observedDiff = fabs(1 - observedRatio);
+
+           if ((left == motorCalibrationBuckets[i]) || (correctedDiff > observedDiff))
+           {
+#ifdef __DEBUG__                                
+               snprintf_P(report, sizeof(report), PSTR("bucket[%d] l: %d diff: %s > %s, ignoring"), motorCalibrationBuckets[i], left, ftoa(floatBuf1, correctedDiff), ftoa(floatBuf2, observedDiff));
+               Serial.println(report);
+#endif                
+           }
+           else
+           {
+#ifdef __DEBUG__                                
+               snprintf_P(report, sizeof(report), PSTR("bucket[%d] l: %d diff: %s <= %s, ADJUSTING"), motorCalibrationBuckets[i], left, ftoa(floatBuf1, correctedDiff), ftoa(floatBuf2, observedDiff));
+               Serial.println(report); 
+#endif
+
+               motorCalibrationRightToLeftRatio[i] = observedRatio;
+               motorCalibrationAdjustedBuckets++;
+           }
+       }
+   }
+
+   free(leftTotals);
+   free(rightTotals);
+
+   buzzer.playFromProgramSpace(alarm);
+   delay(2000);
+
+#ifdef __DEBUG__                    
+   Serial.println("Motor calibration complete ...");
+#endif   
+}
 
 /****************************************************************************************************************
  * Demos 

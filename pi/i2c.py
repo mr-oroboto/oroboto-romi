@@ -32,6 +32,8 @@ def buildTransmitSegments(waypoints, maxVelocity, pivotTurnSpeed, optionByte1, o
         checksum += (waypoint[0] >> 8) & (waypoint[0] & 0xFF)
         checksum += (waypoint[1] >> 8) & (waypoint[1] & 0xFF)
 
+    checksum = checksum % 256
+
     currentSegment = bytearray(struct.pack('>BBBBBBBBBB', 0xA0, 0xA2, 0XA2, len(waypoints), maxVelocity, pivotTurnSpeed, optionByte1, optionByte2, checksum, 0xA1))
     segments.append(currentSegment)
 
