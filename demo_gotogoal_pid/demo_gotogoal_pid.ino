@@ -7,9 +7,9 @@
 #define PID_INTEGRAL     0.0005
 #define PID_DERIVATIVE   0.00
 
-#define MAX_VELOCITY         2                  // cm/s (known good max velocity is "2")
+#define MAX_VELOCITY         5                  // cm/s (slowest known good max velocity is "5")
 #define VELOCITY_ON_APPROACH 1.0
-#define MIN_SPEED            20
+#define MIN_SPEED            20                 // motors stall below this point
 #define MAX_SPEED            300                // on-floor tests show 100 =~ 26.13cm/s, 200 =~ 44.24 cm/s, 300 =~ 65.49cm/s
 #define MAX_SPEED_CM_PER_SEC 65.49
 
@@ -27,7 +27,7 @@
 
 #define ABORT_WAYPOINT_AFTER_DISTANCE_INCREASES false   // true
 #define DISTANCE_INCREASE_ITERATION_THRESHOLD 1
-#define DISTANCE_INCREASE_DRIFT_FROM_INITIAL_VECTOR_THRESHOLD 0.25    // used when ABORT_WAYPOINT_AFTER_DISTANCE_INCREASES is false
+#define DISTANCE_INCREASE_DRIFT_FROM_INITIAL_VECTOR_THRESHOLD 0.05    // used when ABORT_WAYPOINT_AFTER_DISTANCE_INCREASES is false
 
 #define WAYPOINT_PROXIMITY_APPROACHING 5.0      // was 10.0
 #define WAYPOINT_PROXIMITY_REACHED 2.0          // was 3.0
@@ -58,7 +58,9 @@
 #define I2C_MARKER_PAYLOAD_END 0xA3
 
 #define OPTION1_ENABLE_RANGING 0x01
-#define OPTION1_CALIBRATE_MOTORS 0xB0
+#define OPTION1_ENABLE_ABORT_AFTER_DISTANCE_INCREASES 0x02
+#define OPTION1_OVERRIDE_CALIBRATE_MOTORS 0xB0
+#define OPTION1_OVERRIDE_RESET_TO_ORIGIN  0xB1
 
 #define VCC 5.0
 #define VOLTS_PER_CM_DIVISOR 1300.48              // 512.0 * 2.54 (from datasheet)
@@ -89,6 +91,7 @@ uint8_t maxVelocity = MAX_VELOCITY;
 uint8_t pivotTurnSpeed = PIVOT_TURN_SPEED;
 uint8_t optionByte1, optionByte2;
 bool    enableRanging = true;
+bool    abortAfterDistanceToWaypointIncreases = ABORT_WAYPOINT_AFTER_DISTANCE_INCREASES;
 
 struct Pose currentPose;                        // (believed) current position and heading
 struct Pose referencePose;                      // pose of reference waypoint (heading is heading required from currentPose)
@@ -381,7 +384,7 @@ void goToWaypoint(double x, double y)
 
                 consecutiveIncreasingDistances++;
 
-                if (ABORT_WAYPOINT_AFTER_DISTANCE_INCREASES && consecutiveIncreasingDistances >= DISTANCE_INCREASE_ITERATION_THRESHOLD)
+                if (abortAfterDistanceToWaypointIncreases && consecutiveIncreasingDistances >= DISTANCE_INCREASE_ITERATION_THRESHOLD)
                 {
                     abortWaypoint = true;
                 }
@@ -404,13 +407,7 @@ void goToWaypoint(double x, double y)
 #endif
 
                     buzzer.playFromProgramSpace(alarm);
-                    delay(200);
-                    buzzer.playFromProgramSpace(alarm);
-                    delay(200);
-                    buzzer.playFromProgramSpace(alarm);
-                    delay(200);
-                    buzzer.playFromProgramSpace(alarm);
-                    delay(200);
+                    delay(500);
                     break;                  
                 }
             }
@@ -622,14 +619,20 @@ bool pollForWaypoints()
 #endif    
           if (checksum == checksumComputed)
           {
-              enableRanging = (optionByte1 == OPTION1_ENABLE_RANGING);
+              enableRanging = (optionByte1 & OPTION1_ENABLE_RANGING);
+              abortAfterDistanceToWaypointIncreases = (optionByte1 & OPTION1_ENABLE_ABORT_AFTER_DISTANCE_INCREASES);
               receivedFullPayload = true; 
 
               // Overrides
-              if (optionByte1 == OPTION1_CALIBRATE_MOTORS)
+              if (optionByte1 == OPTION1_OVERRIDE_CALIBRATE_MOTORS)
               {
                  calibrateMotors(2);
                  receivedFullPayload = false;  // ignore the waypoints, we're just calibrating  
+              }
+              else if (optionByte1 == OPTION1_OVERRIDE_RESET_TO_ORIGIN)
+              {
+                 resetToOrigin();
+                 receivedFullPayload = false;  // ignore the waypoints                 
               }
           }
           else
@@ -1429,7 +1432,8 @@ void calibrateMagnetometer()
 void calibrateMotors(uint8_t sampleCount) 
 {
    uint16_t i;
-   uint32_t * leftTotals, * rightTotals;
+   uint32_t * leftTotals, * rightTotals, countTravelled = 0;
+   int16_t leftCount;
 
 #ifdef __DEBUG__                    
    Serial.println("Calibrating motors ...");
@@ -1449,14 +1453,7 @@ void calibrateMotors(uint8_t sampleCount)
    {
        uint16_t speedBucket = i % motorCalibrationBucketCount;
 
-       if (speedBucket == 0 && i)
-       {
-          delay(4000);   // delay 4 seconds between samples
-       }
-       else
-       {
-          delay(1000);
-       }
+       delay(500);
        
        encoders.getCountsAndResetLeft();
        encoders.getCountsAndResetRight();
@@ -1465,8 +1462,17 @@ void calibrateMotors(uint8_t sampleCount)
        delay(3000);
        motors.setSpeeds(0, 0);
 
-       leftTotals[speedBucket]  += encoders.getCountsAndResetLeft();
+       leftCount = encoders.getCountsAndResetLeft();
+
+       leftTotals[speedBucket]  += leftCount;
        rightTotals[speedBucket] += encoders.getCountsAndResetRight();
+       countTravelled           += abs(leftCount);
+
+       if (((countTravelled / COUNTS_PER_REVOLUTION) * WHEELRADIUS * 2 * M_PI) > 70)
+       {
+          correctHeadingWithPivotTurnGyro(M_PI / 2);
+          countTravelled = 0;
+       }
    }
 
    // Calculate required adjustment factors
