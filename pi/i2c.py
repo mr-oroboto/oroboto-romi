@@ -85,12 +85,13 @@ def i2cInterrupt(id, tick):
 
         elif d[0] == ord('r'):
             """CMD: REPORT: Receive the next pose snapshot report."""
-            if b == 11:
+            if b == 13:
                 x = struct.unpack_from('>h', d, 2)[0]
                 y = struct.unpack_from('>h', d, 4)[0]
                 heading = struct.unpack_from('b', d, 6)[0]
                 headingFloat = struct.unpack_from('B', d, 7)[0]
                 distanceToObstacle = struct.unpack_from('>H', d, 8)[0]
+                timestamp = struct.unpack_from('>H', d, 10)[0]
 
                 if heading >= 0:
                     heading += (headingFloat / 100.0)
@@ -105,9 +106,9 @@ def i2cInterrupt(id, tick):
                     obstacleX = 0    # ensure that botlab doesn't draw any obstacles, we weren't measuring them
                     obstacleY = 0    # ensure that botlab doesn't draw any obstacles, we weren't measuring them
 
-                print('%d\t%d\t%f\t%d\t%d\t%d' % (x, y, heading, distanceToObstacle, obstacleX, obstacleY))
+                print('%lu\t%d\t%d\t%f\t%d\t%d\t%d' % (timestamp, x, y, heading, distanceToObstacle, obstacleX, obstacleY))
 
-                msg = ('%.2f\t%d\t%d\t%.2f\t%d\t%d' % (0, x, y, heading, obstacleX, obstacleY))
+                msg = ('%lu\t%d\t%d\t%.2f\t%d\t%d' % (timestamp, x, y, heading, obstacleX, obstacleY))
                 udp.logToBotlab(msg, True)
 #           else:
 #             print("read %d bytes for snapshot report, too short!" % b)

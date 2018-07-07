@@ -49,7 +49,7 @@
 #define I2C_WAYPOINT_SIZE 4                     // 2 bytes each (signed short) for x and y co-ordinates 
 #define I2C_WAYPOINTS_PER_SEGMENT 2             // number of waypoints that can be sent per segment for I2C_CMD_GETWAYPOINTS (don't exceed 16 byte max segment size)
 
-#define I2C_SNAPSHOT_SIZE 8                     // 2 bytes (signed short) for x, y, 2 bytes for heading and 2 bytes (unsigned short) for distance
+#define I2C_SNAPSHOT_SIZE 10                    // 2 bytes (signed short) for x, y, 2 bytes for heading, 2 bytes (unsigned short) for distance, 2 bytes (unsigned short) for timestamp
 #define I2C_SNAPSHOTS_PER_SEGMENT 1             // number of snapshots that can be sent per segment for I2C_CMD_REPORTSNAPSHOTS (don't exceed 16 byte max segment size)
 
 #define I2C_MARKER_SEGMENT_START 0xA0
@@ -72,7 +72,7 @@ struct Pose {
   double        y;
   double        heading;
   double        distanceToObstacle;
-  uint32_t      timestamp;  
+  uint16_t      timestamp;  
 };
 
 Romi32U4Encoders  encoders;
@@ -95,6 +95,7 @@ bool    abortAfterDistanceToWaypointIncreases = ABORT_WAYPOINT_AFTER_DISTANCE_IN
 
 struct Pose currentPose;                        // (believed) current position and heading
 struct Pose referencePose;                      // pose of reference waypoint (heading is heading required from currentPose)
+uint32_t    waypointStartTime;
 
 #define MAX_POSE_SNAPSHOTS 48
 struct Pose poseSnapshots[MAX_POSE_SNAPSHOTS];  // capture snapshots of our pose along each waypoint path for reporting
@@ -693,18 +694,20 @@ void reportPoseSnapshots()
         uint8_t headingFloat = (poseSnapshots[i].heading >= 0) ? ((uint8_t)((int)(poseSnapshots[i].heading * 100.0) % 100)) : ((uint8_t)((int)(poseSnapshots[i].heading * -100.0) % 100));
 
 #ifdef __DEBUG__                  
-        snprintf_P(report, sizeof(report), PSTR("   Adding snapshot [%d]: (%d,%d at %d.%d) dist %d"), i, (int16_t)poseSnapshots[i].x, (int16_t)poseSnapshots[i].y, heading, headingFloat, (uint16_t)poseSnapshots[i].distanceToObstacle);      
+        snprintf_P(report, sizeof(report), PSTR("   Adding snapshot [%d]: (%d,%d at %d.%d) dist %d ts: %u"), i, (int16_t)poseSnapshots[i].x, (int16_t)poseSnapshots[i].y, heading, headingFloat, (uint16_t)poseSnapshots[i].distanceToObstacle, poseSnapshots[i].timestamp);      
         Serial.println(report);  
 #endif
 
-        snapshotBuffer[1+(bufferIndex*8)+0] = (unsigned char)((int16_t)poseSnapshots[i].x >> 8);
-        snapshotBuffer[1+(bufferIndex*8)+1] = (unsigned char)((int16_t)poseSnapshots[i].x & 0xFF);
-        snapshotBuffer[1+(bufferIndex*8)+2] = (unsigned char)((int16_t)poseSnapshots[i].y >> 8);
-        snapshotBuffer[1+(bufferIndex*8)+3] = (unsigned char)((int16_t)poseSnapshots[i].y & 0xFF);
-        snapshotBuffer[1+(bufferIndex*8)+4] = (unsigned char)heading;
-        snapshotBuffer[1+(bufferIndex*8)+5] = (unsigned char)headingFloat;        
-        snapshotBuffer[1+(bufferIndex*8)+6] = (unsigned char)((int16_t)poseSnapshots[i].distanceToObstacle >> 8);
-        snapshotBuffer[1+(bufferIndex*8)+7] = (unsigned char)((int16_t)poseSnapshots[i].distanceToObstacle & 0xFF);
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+0] = (unsigned char)((int16_t)poseSnapshots[i].x >> 8);
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+1] = (unsigned char)((int16_t)poseSnapshots[i].x & 0xFF);
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+2] = (unsigned char)((int16_t)poseSnapshots[i].y >> 8);
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+3] = (unsigned char)((int16_t)poseSnapshots[i].y & 0xFF);
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+4] = (unsigned char)heading;
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+5] = (unsigned char)headingFloat;        
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+6] = (unsigned char)((int16_t)poseSnapshots[i].distanceToObstacle >> 8);
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+7] = (unsigned char)((int16_t)poseSnapshots[i].distanceToObstacle & 0xFF);
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+8] = (unsigned char)(poseSnapshots[i].timestamp >> 8);
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+9] = (unsigned char)(poseSnapshots[i].timestamp & 0xFF);
 
         if ((I2C_SNAPSHOTS_PER_SEGMENT == 1) || (i % (I2C_SNAPSHOTS_PER_SEGMENT - 1) == 0))
         {
@@ -764,6 +767,7 @@ void recordSnapshot(double heading, double x, double y)
 {
     if (poseSnapshotCount < MAX_POSE_SNAPSHOTS)
     {
+        poseSnapshots[poseSnapshotCount].timestamp = (uint16_t)(millis() - waypointStartTime);
         poseSnapshots[poseSnapshotCount].heading = heading;
         poseSnapshots[poseSnapshotCount].x = x;
         poseSnapshots[poseSnapshotCount].y = y;
@@ -836,6 +840,7 @@ void resetDistancesForNewWaypoint()
     distTotal = 0.0;
     distTotalPrev = 0.0;  
     poseSnapshotCount = 0;
+    waypointStartTime = millis();
 
     gyroLastUpdateMicros = micros();
 }
