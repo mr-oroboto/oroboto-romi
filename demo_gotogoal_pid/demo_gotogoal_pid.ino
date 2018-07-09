@@ -3,9 +3,10 @@
 #include <LSM6.h>
 #include "QMC5883L.h"
 
-#define PID_PROPORTIONAL 0.90
-#define PID_INTEGRAL     0.0005
-#define PID_DERIVATIVE   0.00
+#define PID_PROPORTIONAL      50.00             // was 0.9
+#define PID_INTEGRAL          0.001             // was 0.0005
+#define PID_DERIVATIVE        0.00
+#define PID_LOOP_INTERVAL_MS  50
 
 #define MAX_VELOCITY         5                  // cm/s (slowest known good max velocity is "5")
 #define VELOCITY_ON_APPROACH 1.0
@@ -33,7 +34,8 @@
 #define WAYPOINT_PROXIMITY_REACHED 2.0          // was 3.0
 #define POST_WAYPOINT_SLEEP_MS 300              // known good sleep is 1000
 
-#define PERIODIC_REFERENCE_HEADING_RESET false  // should we periodically recalculate required reference heading during waypoint finding?
+#define PERIODIC_REFERENCE_HEADING_RESET true   // should we periodically recalculate required reference heading during waypoint finding?
+#define PERIODIC_REFERENCE_HEADING_INTERVAL 5   // reset every n iterations of the PID loop (10 is known good)
 
 #define COUNTS_PER_REVOLUTION 1440.0            // number of encoder counts per wheel revolution (should be ~1440)
 
@@ -59,8 +61,11 @@
 
 #define OPTION1_ENABLE_RANGING 0x01
 #define OPTION1_ENABLE_ABORT_AFTER_DISTANCE_INCREASES 0x02
+#define OPTION1_ENABLE_CAP_ANGULAR_VELOCITY_SIGNAL 0x04
+#define OPTION1_ENABLE_PERIODIC_REFERENCE_HEADING_RESET 0x08
 #define OPTION1_OVERRIDE_CALIBRATE_MOTORS 0xB0
 #define OPTION1_OVERRIDE_RESET_TO_ORIGIN  0xB1
+#define OPTION1_OVERRIDE_SET_PID_PARAMETERS 0xB2
 
 #define VCC 5.0
 #define VOLTS_PER_CM_DIVISOR 1300.48              // 512.0 * 2.54 (from datasheet)
@@ -101,6 +106,12 @@ uint32_t    waypointStartTime;
 struct Pose poseSnapshots[MAX_POSE_SNAPSHOTS];  // capture snapshots of our pose along each waypoint path for reporting
 int         poseSnapshotCount;
 
+float     pidProportional    = PID_PROPORTIONAL;
+float     pidIntegral        = PID_INTEGRAL;
+bool      capAngularVelocity = CAP_ANGULAR_VELOCITY_SIGNAL;
+bool      periodicReferenceHeadingReset = PERIODIC_REFERENCE_HEADING_RESET;
+uint16_t  pidLoopIntervalMs  = PID_LOOP_INTERVAL_MS;
+
 double headingError;              // for PID proportional term
 double headingErrorPrev;          // for PID derivative term
 double headingErrorIntegral;      // for PID integral term
@@ -124,7 +135,7 @@ double        magnetoAngleRad;
 #endif
 
 float * motorCalibrationRightToLeftRatio = NULL;
-int16_t motorCalibrationBuckets[] = {30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140};     // Motor speed range is -300 to 300 (reverse to forward)
+int16_t motorCalibrationBuckets[] = {30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240};     // Motor speed range is -300 to 300 (reverse to forward)
 uint8_t motorCalibrationAdjustedBuckets = 0;
 uint8_t motorCalibrationBucketCount = sizeof(motorCalibrationBuckets) / sizeof(int16_t);
 
@@ -133,8 +144,9 @@ char report[80];
 char floatBuf1[16], floatBuf2[16], floatBuf3[16], floatBuf4[16], floatBuf5[16];
 #endif
 
-const char finished[] PROGMEM = "! L16 V8 cdefgab>cbagfedc";
-const char alarm[]  PROGMEM = "!<c2";
+const char soundFinished[] PROGMEM = "! L16 V8 cdefgab>cbagfedc";
+const char soundAlarm[]  PROGMEM = "!<c2";
+const char soundAbortedWaypoint[]  PROGMEM = "!<c2";
 const char soundOk[] PROGMEM = "v10>>g16>>>c16";
 
 /*****************************************************************************************************
@@ -161,19 +173,20 @@ void loop()
 {
    if (pollForWaypoints())
    {
+#ifdef __DEBUG__
+      snprintf_P(report, sizeof(report), PSTR("START: range[%d] abort[%d] cap[%d] refReset[%d] P[%s] I[%s] dt[%d]"), enableRanging, abortAfterDistanceToWaypointIncreases, capAngularVelocity, periodicReferenceHeadingReset, ftoa(floatBuf1, pidProportional), ftoa(floatBuf2, pidIntegral), pidLoopIntervalMs);    
+      Serial.println(report);
+#endif           
+
       ledYellow(1);
       
       for (uint8_t i = 0; i < waypointPayloadCurrentCount; i++)
       {
-#ifdef __DEBUG__
-           snprintf_P(report, sizeof(report), PSTR("waypoint[%d]: (%d,%d)"), i, waypointPayload[(i*2)], waypointPayload[(i*2)+1]);    
-           Serial.println(report);
-#endif           
            goToWaypoint((double)waypointPayload[(i*2)], (double)waypointPayload[(i*2)+1]);
            reportPoseSnapshots();
       }
 
-      buzzer.playFromProgramSpace(finished);
+      buzzer.playFromProgramSpace(soundFinished);
       delay(2000);
 
       ledYellow(0);
@@ -208,9 +221,7 @@ void goToWaypoint(double x, double y)
     headingErrorIntegral = 0.0;
 
 #ifdef __DEBUG__
-    snprintf_P(report, sizeof(report), PSTR("************************ WAYPOINT (%s,%s) ************************"), ftoa(floatBuf1, x), ftoa(floatBuf2, y));    
-    Serial.println(report);      
-    snprintf_P(report, sizeof(report), PSTR("to (%s, %s) from pose (%s, %s head [%s])"), ftoa(floatBuf1, x), ftoa(floatBuf2, y), ftoa(floatBuf3, currentPose.x), ftoa(floatBuf4, currentPose.y), ftoa(floatBuf5, currentPose.heading));    
+    snprintf_P(report, sizeof(report), PSTR("************ WAYPOINT (%s,%s) from (%s,%s head [%s]) ************"), ftoa(floatBuf1, x), ftoa(floatBuf2, y), ftoa(floatBuf3, currentPose.x), ftoa(floatBuf4, currentPose.y), ftoa(floatBuf5, currentPose.heading));    
     Serial.println(report);      
 #endif
 
@@ -221,8 +232,9 @@ void goToWaypoint(double x, double y)
     referencePose.heading = getHeading(referencePose.x, referencePose.y, currentPose.x, currentPose.y, currentPose.heading);
 
     uint32_t      iteration = 0;
-    double        dt = 0.05;                // 50ms
+    double        dt = pidLoopIntervalMs / 1000.0;
     unsigned long lastMillis = 0;
+    int           lastLeftSpeed = 0, lastRightSpeed = 0;
 
     // Reset wheel encoder counts to zero, we don't care about their current values
     encoders.getCountsAndResetLeft();
@@ -235,7 +247,7 @@ void goToWaypoint(double x, double y)
             dt = (millis() - lastMillis) / 1000.0;
 
             // Recalculate reference heading every now and then as our current position changes
-            if (PERIODIC_REFERENCE_HEADING_RESET && (iteration % 10 == 0))
+            if (periodicReferenceHeadingReset && (iteration % PERIODIC_REFERENCE_HEADING_INTERVAL == 0))
             {
                 referencePose.heading = getHeading(referencePose.x, referencePose.y, currentPose.x, currentPose.y, currentPose.heading);
 
@@ -258,11 +270,11 @@ void goToWaypoint(double x, double y)
         
         if (encoders.checkErrorLeft())
         {
-            buzzer.playFromProgramSpace(alarm);
+            buzzer.playFromProgramSpace(soundAlarm);
         }
         if (encoders.checkErrorRight())
         {
-            buzzer.playFromProgramSpace(alarm);
+            buzzer.playFromProgramSpace(soundAlarm);
         }
 
         if (iteration != 0)
@@ -281,7 +293,7 @@ void goToWaypoint(double x, double y)
             distTotal = (distLeft + distRight) / 2.0;                                                   // cm travelled forward (total)
 
 #ifdef __DEBUG__
-            snprintf_P(report, sizeof(report), PSTR("[%d] travelled L[%s] R[%s] dist[%s] distPrev[%s]"), iteration, ftoa(floatBuf1, distLeft), ftoa(floatBuf2, distRight), ftoa(floatBuf3, distTotal), ftoa(floatBuf4, distTotalPrev)); 
+            snprintf_P(report, sizeof(report), PSTR("travelled L[%s] R[%s] dist[%s] distPrev[%s] dt[%s] [%d]"), ftoa(floatBuf1, distLeft), ftoa(floatBuf2, distRight), ftoa(floatBuf3, distTotal), ftoa(floatBuf4, distTotalPrev), ftoa(floatBuf5, dt), iteration); 
             Serial.println(report);      
 #endif
 
@@ -367,7 +379,7 @@ void goToWaypoint(double x, double y)
         }
 
 #ifdef __DEBUG__
-        snprintf_P(report, sizeof(report), PSTR("   now (%s, %s) head [%s] err[%s] distTgt[%s]"), ftoa(floatBuf1, currentPose.x), ftoa(floatBuf2, currentPose.y), ftoa(floatBuf3, currentPose.heading), ftoa(floatBuf4, headingError), ftoa(floatBuf5, targetVectorMagnitude));    
+        snprintf_P(report, sizeof(report), PSTR("   now (%s,%s) head [%s] err[%s] distTgt[%s]"), ftoa(floatBuf1, currentPose.x), ftoa(floatBuf2, currentPose.y), ftoa(floatBuf3, currentPose.heading), ftoa(floatBuf4, headingError), ftoa(floatBuf5, targetVectorMagnitude));    
         Serial.println(report);      
 #endif
 
@@ -403,11 +415,10 @@ void goToWaypoint(double x, double y)
                     motors.setSpeeds(0, 0);
 
 #ifdef __DEBUG__
-                    snprintf_P(report, sizeof(report), PSTR("   !!! ABORT: DISTANCE TO TARGET INCREASED"));    
-                    Serial.println(report);      
+                    Serial.println("   !!! ABORT: DISTANCE TO TARGET INCREASED");      
 #endif
 
-                    buzzer.playFromProgramSpace(alarm);
+                    buzzer.playFromProgramSpace(soundAbortedWaypoint);
                     delay(500);
                     break;                  
                 }
@@ -425,8 +436,7 @@ void goToWaypoint(double x, double y)
             approachingTarget = true;
 
 #ifdef __DEBUG__
-            snprintf_P(report, sizeof(report), PSTR("   >>> slowing..."));    
-            Serial.println(report);      
+            Serial.println("   >>> slowing...");      
 #endif
 
             forwardVelocity = VELOCITY_ON_APPROACH;
@@ -435,8 +445,7 @@ void goToWaypoint(double x, double y)
         if (targetVectorMagnitude <= WAYPOINT_PROXIMITY_REACHED)
         {
 #ifdef __DEBUG__          
-            snprintf_P(report, sizeof(report), PSTR("   >>> WAYPOINT REACHED <<<"));    
-            Serial.println(report);      
+            Serial.println("   >>> WAYPOINT REACHED <<<");      
 #endif            
             break;
         }
@@ -448,22 +457,21 @@ void goToWaypoint(double x, double y)
         headingErrorIntegral          += (headingError * dt);
         headingErrorPrev               = headingError;
 
-        double pidP = PID_PROPORTIONAL * headingError;
-        double pidI = PID_INTEGRAL * headingErrorIntegral;
+        double pidP = pidProportional * headingError;
+        double pidI = pidIntegral * headingErrorIntegral;
         double pidD = PID_DERIVATIVE * headingErrorDerivative;
 
         // PID, this gives us the control signal, u, this is our required angular velocity to achieve our desired heading
         double u = pidP + pidI + pidD;
 
-        if (CAP_ANGULAR_VELOCITY_SIGNAL)
+        if (capAngularVelocity)
         {
             if (u > ANGULAR_VELOCITY_SIGNAL_LIMIT)
             {
                 u = ANGULAR_VELOCITY_SIGNAL_LIMIT;
 
 #ifdef __DEBUG__                
-                snprintf_P(report, sizeof(report), PSTR("   !!! Capped angular velocity signal"));    
-                Serial.println(report);      
+                Serial.println("   !!! Capped angular velocity signal");      
 #endif                
             }
             else if (u < (-1.0 * ANGULAR_VELOCITY_SIGNAL_LIMIT))
@@ -471,8 +479,7 @@ void goToWaypoint(double x, double y)
                 u = -1.0 * ANGULAR_VELOCITY_SIGNAL_LIMIT;
 
 #ifdef __DEBUG__                
-                snprintf_P(report, sizeof(report), PSTR("   !!! Capped angular velocity signal"));    
-                Serial.println(report);                      
+                Serial.println("   !!! Capped angular velocity signal");                      
 #endif                
             }
         }
@@ -483,6 +490,24 @@ void goToWaypoint(double x, double y)
 
         int leftSpeed  = convertVelocityToMotorSpeed(velocityLeft);
         int rightSpeed = convertVelocityToMotorSpeed(velocityRight); 
+
+        if (approachingTarget)
+        {
+           // Avoid low speed oscillations that can occur and stall at low speed
+           if (leftSpeed == lastRightSpeed && rightSpeed == lastLeftSpeed)
+           {
+#ifdef __DEBUG__
+              Serial.println("   !!! Stalled at low speed, aborting!"); 
+#endif
+              motors.setSpeeds(0, 0);
+              buzzer.playFromProgramSpace(soundAbortedWaypoint);
+              delay(500);
+              break;                                
+           }
+        }
+
+        lastLeftSpeed = leftSpeed;
+        lastRightSpeed = rightSpeed;
 
         leftSpeed = getCalibratedLeftMotorSpeed(leftSpeed);
 
@@ -497,7 +522,7 @@ void goToWaypoint(double x, double y)
         iteration++;
 
         lastMillis = millis();
-        delay(50);    // 50ms
+        delay(pidLoopIntervalMs);
 
         // Time passes, wheels respond to new control signal and begin moving at new velocities
     }
@@ -607,7 +632,7 @@ bool pollForWaypoints()
           int16_t y = (waypointsBuffer[bufferOffset + (i * I2C_WAYPOINT_SIZE) + 2] << 8) | waypointsBuffer[bufferOffset + (i * I2C_WAYPOINT_SIZE) + 3];
 
           waypointPayload[(waypointPayloadCurrentCount * sizeof(int16_t))]   = x;
-          waypointPayload[(waypointPayloadCurrentCount * sizeof(int16_t))+1] = y;
+          waypointPayload[(waypointPayloadCurrentCount * sizeof(int16_t))+1] = y;  
 
           checksumComputed += ((x >> 8) & (x & 0xFF));
           checksumComputed += ((y >> 8) & (y & 0xFF));
@@ -622,6 +647,9 @@ bool pollForWaypoints()
           {
               enableRanging = (optionByte1 & OPTION1_ENABLE_RANGING);
               abortAfterDistanceToWaypointIncreases = (optionByte1 & OPTION1_ENABLE_ABORT_AFTER_DISTANCE_INCREASES);
+              capAngularVelocity = (optionByte1 & OPTION1_ENABLE_CAP_ANGULAR_VELOCITY_SIGNAL);
+              periodicReferenceHeadingReset = (optionByte1 & OPTION1_ENABLE_PERIODIC_REFERENCE_HEADING_RESET);
+              
               receivedFullPayload = true; 
 
               // Overrides
@@ -634,6 +662,19 @@ bool pollForWaypoints()
               {
                  resetToOrigin();
                  receivedFullPayload = false;  // ignore the waypoints                 
+              }
+              else if (optionByte1 == OPTION1_OVERRIDE_SET_PID_PARAMETERS)
+              {
+                 // When setting PID parameters the waypoints stand in as command bytes
+                 pidLoopIntervalMs = maxVelocity;           // interval up to 255ms can be set via I2C
+                 pidProportional = (uint8_t)(waypointPayload[0] >> 8) + ((uint8_t)(waypointPayload[0] & 0xFF) / 100.0);
+                 pidIntegral = (uint8_t)(waypointPayload[1] >> 8) + ((uint8_t)(waypointPayload[1] & 0xFF) / 100.0);
+#ifdef __DEBUG__
+              snprintf_P(report, sizeof(report), PSTR(" - Updated PID. Interval %ums, P: %s I: %s"), pidLoopIntervalMs, ftoa(floatBuf1, pidProportional), ftoa(floatBuf2, pidIntegral));      
+              Serial.println(report);
+#endif 
+
+                 receivedFullPayload = false;
               }
           }
           else
@@ -1239,7 +1280,7 @@ int16_t getCalibratedLeftMotorSpeed(int16_t desiredSpeed)
    if ( ! motorCalibrationRightToLeftRatio)
    {
 #ifdef __DEBUG__    
-      Serial.println("Motor calibration has not been performed");
+      Serial.println("   Motor calibration has not been performed");
 #endif      
       return desiredSpeed;
    }
@@ -1279,7 +1320,7 @@ void updateGyroscopeHeading()
 
     if (imu.timeoutOccurred())
     {
-      buzzer.playFromProgramSpace(alarm);    
+      buzzer.playFromProgramSpace(soundAlarm);    
     }
 
     // Update the orientation as determined by the gyroscope
@@ -1345,7 +1386,10 @@ char *ftoa(char *a, double f)
     f = fabs(f);
 
     long heiltal = (long)f;
-    itoa(heiltal, a, 10);
+    if ( ! itoa(heiltal, a, 10))
+    {
+       *a = 'X';
+    }
     while (*a != '\0') a++;
     *a++ = '.';
 
@@ -1364,7 +1408,7 @@ char *ftoa(char *a, double f)
 void calibrateGyro()
 {
     delay(5000);                          // give user time to place device at rest
-    buzzer.playFromProgramSpace(alarm);
+    buzzer.playFromProgramSpace(soundAlarm);
 
 #ifdef __DEBUG__                    
     Serial.println("Calibrating gyroscope ...");
@@ -1395,7 +1439,7 @@ void calibrateGyro()
     Serial.println("Gyroscope calibration complete");
 #endif
     
-    buzzer.playFromProgramSpace(alarm);  
+    buzzer.playFromProgramSpace(soundAlarm);  
 }
 
 
@@ -1406,7 +1450,7 @@ void calibrateGyro()
 void calibrateMagnetometer()
 {
     delay(5000);                          // give user time to pick up device
-    buzzer.playFromProgramSpace(alarm);
+    buzzer.playFromProgramSpace(soundAlarm);
 
 #ifdef __DEBUG__                    
     Serial.println("Calibrating compass, please move device around all axes ...");
@@ -1426,7 +1470,7 @@ void calibrateMagnetometer()
 #ifdef __DEBUG__                    
     Serial.println("Compass calibration complete");
 #endif    
-    buzzer.playFromProgramSpace(alarm);
+    buzzer.playFromProgramSpace(soundAlarm);
 }
 #endif
 
@@ -1451,7 +1495,7 @@ void calibrateMotors(uint8_t sampleCount)
    memset(leftTotals, 0, motorCalibrationBucketCount * sizeof(uint32_t));
    memset(rightTotals, 0, motorCalibrationBucketCount * sizeof(uint32_t));
 
-   buzzer.playFromProgramSpace(alarm);
+   buzzer.playFromProgramSpace(soundAlarm);
    delay(2000);
 
    for (i = 0; i < motorCalibrationBucketCount * sampleCount; i++)
@@ -1519,7 +1563,7 @@ void calibrateMotors(uint8_t sampleCount)
    free(leftTotals);
    free(rightTotals);
 
-   buzzer.playFromProgramSpace(alarm);
+   buzzer.playFromProgramSpace(soundAlarm);
    delay(2000);
 
 #ifdef __DEBUG__                    
@@ -1587,7 +1631,7 @@ void preprogrammedWaypoints()
     Serial.println(report);      
 #endif
 
-    buzzer.playFromProgramSpace(finished);
+    buzzer.playFromProgramSpace(soundFinished);
 }
 
 void gyroBasedOrientation() 
