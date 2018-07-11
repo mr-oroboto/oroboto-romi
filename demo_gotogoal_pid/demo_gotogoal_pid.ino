@@ -71,6 +71,9 @@
 #define VOLTS_PER_CM_DIVISOR 1300.48              // 512.0 * 2.54 (from datasheet)
 #define VOLTS_PER_CM VCC / VOLTS_PER_CM_DIVISOR   // 0.003844734251969
 #define ADC_LSB_PER_VOLT 1023 / VCC               // 1023 / 5.0
+#define CLOSE_PROXIMITY_THRESHOLD 17.0
+#define MAX_CONSECUTIVE_CLOSE_PROXIMITY_READINGS 2
+#define OBSTACLE_AVOIDANCE_DISTANCE 20.0
 
 struct Pose {
   double        x;
@@ -123,6 +126,8 @@ double distRightPrev;
 double distTotal;                 // total distance travelled in this waypoint segment
 double distTotalPrev;             // previous total distance travelled in this waypoint segment
 
+uint8_t consecutiveCloseProximityReadings;
+
 int16_t       gyroOffset = 0;           // average reading on gyro Z axis during calibration
 unsigned long gyroLastUpdateMicros = 0; // helps calculate dt for gyro readings (in microseconds)
 double        gyroAngle;
@@ -144,9 +149,12 @@ char report[80];
 char floatBuf1[16], floatBuf2[16], floatBuf3[16], floatBuf4[16], floatBuf5[16];
 #endif
 
+#define FREQUENCY_DURATION 300
+#define FREQUENCY_VOLUME 9
+#define FREQUENCY_MODE_ABORTED_WAYPOINT 800
+#define FREQUENCY_MODE_ALARM 200
+
 const char soundFinished[] PROGMEM = "! L16 V8 cdefgab>cbagfedc";
-const char soundAlarm[]  PROGMEM = "!<c2";
-const char soundAbortedWaypoint[]  PROGMEM = "!<c2";
 const char soundOk[] PROGMEM = "v10>>g16>>>c16";
 
 /*****************************************************************************************************
@@ -180,10 +188,50 @@ void loop()
 
       ledYellow(1);
       
-      for (uint8_t i = 0; i < waypointPayloadCurrentCount; i++)
+      for (int8_t i = 0; i < waypointPayloadCurrentCount; i++)
       {
-           goToWaypoint((double)waypointPayload[(i*2)], (double)waypointPayload[(i*2)+1]);
+           bool abortedDueToObstacle = goToWaypoint((double)waypointPayload[(i*2)], (double)waypointPayload[(i*2)+1]);
            reportPoseSnapshots();
+
+           if (abortedDueToObstacle)
+           {
+              int attempts = 0;
+
+              while (attempts < 7 && abortedDueToObstacle)
+              {
+                 // Rotate 45 degrees clockwise and try again
+                 double avoidanceHeading = atan2(sin(currentPose.heading - (M_PI / 4)), cos(currentPose.heading - (M_PI / 4)));
+                 double avoidanceWaypointX = currentPose.x + (OBSTACLE_AVOIDANCE_DISTANCE * cos(avoidanceHeading));
+                 double avoidanceWaypointY = currentPose.y + (OBSTACLE_AVOIDANCE_DISTANCE * sin(avoidanceHeading));
+
+#ifdef __DEBUG__
+                 snprintf_P(report, sizeof(report), PSTR("Collision avoidance attempt[%d], target (%s,%s)"), attempts, ftoa(floatBuf1, avoidanceWaypointX), ftoa(floatBuf2, avoidanceWaypointY));    
+                 Serial.println(report);
+#endif
+
+                 abortedDueToObstacle = goToWaypoint(avoidanceWaypointX, avoidanceWaypointY);
+                 attempts++;
+              }
+
+#ifdef __DEBUG__
+              snprintf_P(report, sizeof(report), PSTR("Collision avoidance finished %s after %d attempts"), abortedDueToObstacle ? "successfully" : "unsuccessfully", attempts);    
+              Serial.println(report);
+#endif
+
+              if (attempts == 7 && abortedDueToObstacle)
+              {
+                 buzzer.playFrequency(FREQUENCY_MODE_ABORTED_WAYPOINT, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+                 delay(FREQUENCY_DURATION);
+                 buzzer.playFrequency(FREQUENCY_MODE_ABORTED_WAYPOINT, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+                 delay(FREQUENCY_DURATION);
+
+                 break;   // we're blocked on all sides!
+              }
+              else
+              {
+                 i--;     // try the current waypoint again
+              }
+           }
       }
 
       buzzer.playFromProgramSpace(soundFinished);
@@ -203,7 +251,7 @@ void loop()
 /**
  * Go to the specified waypoint from the current waypoint.
  */
-void goToWaypoint(double x, double y) 
+bool goToWaypoint(double x, double y) 
 {
     double    targetVectorMagnitude;                    // current distance between where we think we are and the waypoint
     double    targetVectorMagnitudeLast = 0.0;          // last distance between where we think we were and the waypoint
@@ -211,6 +259,7 @@ void goToWaypoint(double x, double y)
     double    targetVectorMagnitudeAtStartOfDrift;      // if we begin to get further from target (rather than closer), what was our distance to the target when this started?
     uint8_t   consecutiveIncreasingDistances = 0;
     bool      approachingTarget = false;                // once we start getting close to waypoint, don't forget that
+    bool      abortedDueToObstacle = false;
 
     double    velocityLeft = 0.0, velocityRight = 0.0;  // current velocity of left and right wheels
 
@@ -270,11 +319,11 @@ void goToWaypoint(double x, double y)
         
         if (encoders.checkErrorLeft())
         {
-            buzzer.playFromProgramSpace(soundAlarm);
+            buzzer.playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
         }
         if (encoders.checkErrorRight())
         {
-            buzzer.playFromProgramSpace(soundAlarm);
+            buzzer.playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
         }
 
         if (iteration != 0)
@@ -369,6 +418,20 @@ void goToWaypoint(double x, double y)
         if ((iteration % 8 == 0) && (poseSnapshotCount < MAX_POSE_SNAPSHOTS))   // don't poll for distance more often than every 400ms (loop has delay ~50ms)
         {
             recordSnapshot(currentPose.heading, currentPose.x, currentPose.y);
+
+            if (enableRanging && consecutiveCloseProximityReadings >= MAX_CONSECUTIVE_CLOSE_PROXIMITY_READINGS)
+            {
+               motors.setSpeeds(0, 0);
+#ifdef __DEBUG__
+               Serial.println("   !!! ABORT: OBSTACLE DETECTED");      
+#endif
+               buzzer.playFrequency(FREQUENCY_MODE_ABORTED_WAYPOINT, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+               delay(FREQUENCY_DURATION);
+
+               abortedDueToObstacle = true;
+               
+               break;
+            }
         }
 
         // What is the magnitude of the vector between us and our target?
@@ -418,8 +481,8 @@ void goToWaypoint(double x, double y)
                     Serial.println("   !!! ABORT: DISTANCE TO TARGET INCREASED");      
 #endif
 
-                    buzzer.playFromProgramSpace(soundAbortedWaypoint);
-                    delay(500);
+                    buzzer.playFrequency(FREQUENCY_MODE_ABORTED_WAYPOINT, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+                    delay(FREQUENCY_DURATION);
                     break;                  
                 }
             }
@@ -496,12 +559,12 @@ void goToWaypoint(double x, double y)
            // Avoid low speed oscillations that can occur and stall at low speed
            if (leftSpeed == lastRightSpeed && rightSpeed == lastLeftSpeed)
            {
+              motors.setSpeeds(0, 0);
 #ifdef __DEBUG__
               Serial.println("   !!! Stalled at low speed, aborting!"); 
 #endif
-              motors.setSpeeds(0, 0);
-              buzzer.playFromProgramSpace(soundAbortedWaypoint);
-              delay(500);
+              buzzer.playFrequency(FREQUENCY_MODE_ABORTED_WAYPOINT, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+              delay(FREQUENCY_DURATION);
               break;                                
            }
         }
@@ -529,6 +592,8 @@ void goToWaypoint(double x, double y)
 
     motors.setSpeeds(0, 0);
     delay(POST_WAYPOINT_SLEEP_MS);
+
+    return abortedDueToObstacle;
 }
 
 
@@ -815,7 +880,16 @@ void recordSnapshot(double heading, double x, double y)
 
         if (enableRanging)
         {
-            poseSnapshots[poseSnapshotCount].distanceToObstacle = getSonarRangedDistance();        
+            poseSnapshots[poseSnapshotCount].distanceToObstacle = getSonarRangedDistance();
+
+            if (poseSnapshots[poseSnapshotCount].distanceToObstacle < CLOSE_PROXIMITY_THRESHOLD)
+            {
+               consecutiveCloseProximityReadings++;
+            }
+            else
+            {
+               consecutiveCloseProximityReadings = 0;
+            }
         }
         else
         {
@@ -881,8 +955,9 @@ void resetDistancesForNewWaypoint()
     distTotal = 0.0;
     distTotalPrev = 0.0;  
     poseSnapshotCount = 0;
+    consecutiveCloseProximityReadings = 0;
+    
     waypointStartTime = millis();
-
     gyroLastUpdateMicros = micros();
 }
 
@@ -1320,7 +1395,8 @@ void updateGyroscopeHeading()
 
     if (imu.timeoutOccurred())
     {
-      buzzer.playFromProgramSpace(soundAlarm);    
+       buzzer.playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+       delay(FREQUENCY_DURATION);
     }
 
     // Update the orientation as determined by the gyroscope
@@ -1408,7 +1484,8 @@ char *ftoa(char *a, double f)
 void calibrateGyro()
 {
     delay(5000);                          // give user time to place device at rest
-    buzzer.playFromProgramSpace(soundAlarm);
+    buzzer.playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+    delay(FREQUENCY_DURATION);
 
 #ifdef __DEBUG__                    
     Serial.println("Calibrating gyroscope ...");
@@ -1439,7 +1516,8 @@ void calibrateGyro()
     Serial.println("Gyroscope calibration complete");
 #endif
     
-    buzzer.playFromProgramSpace(soundAlarm);  
+    buzzer.playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+    delay(FREQUENCY_DURATION);
 }
 
 
@@ -1450,7 +1528,8 @@ void calibrateGyro()
 void calibrateMagnetometer()
 {
     delay(5000);                          // give user time to pick up device
-    buzzer.playFromProgramSpace(soundAlarm);
+    buzzer.playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+    delay(FREQUENCY_DURATION);
 
 #ifdef __DEBUG__                    
     Serial.println("Calibrating compass, please move device around all axes ...");
@@ -1470,7 +1549,8 @@ void calibrateMagnetometer()
 #ifdef __DEBUG__                    
     Serial.println("Compass calibration complete");
 #endif    
-    buzzer.playFromProgramSpace(soundAlarm);
+    buzzer.playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+    delay(FREQUENCY_DURATION);
 }
 #endif
 
@@ -1495,8 +1575,8 @@ void calibrateMotors(uint8_t sampleCount)
    memset(leftTotals, 0, motorCalibrationBucketCount * sizeof(uint32_t));
    memset(rightTotals, 0, motorCalibrationBucketCount * sizeof(uint32_t));
 
-   buzzer.playFromProgramSpace(soundAlarm);
-   delay(2000);
+   buzzer.playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+   delay(FREQUENCY_DURATION);
 
    for (i = 0; i < motorCalibrationBucketCount * sampleCount; i++)
    {
@@ -1563,8 +1643,8 @@ void calibrateMotors(uint8_t sampleCount)
    free(leftTotals);
    free(rightTotals);
 
-   buzzer.playFromProgramSpace(soundAlarm);
-   delay(2000);
+   buzzer.playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+   delay(FREQUENCY_DURATION);
 
 #ifdef __DEBUG__                    
    Serial.println("Motor calibration complete ...");
