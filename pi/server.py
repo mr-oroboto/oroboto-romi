@@ -3,21 +3,38 @@
 import config
 import i2c
 import udp
+import globals
+
+PI_OPTION_FOLLOW_ME_MODE = 0x01
 
 def botLabCallback(data):
     dataString = data.decode('ascii')
     payload = dataString.split()
 
-    if len(payload) < 6:
-        print('Received invalid payload from botLab: [%s]' % dataString)
+    if len(payload) < 8:   # name + all option bytes plus one waypoint pair
+        print('Received invalid command payload: [%s]' % dataString)
         return
 
-    maxVelocity = int(payload[0])
-    pivotTurnSpeed = int(payload[1])
-    optionByte1 = int(payload[2])
-    optionByte2 = int(payload[3])
+    if payload[0] == config.name:
+        print('Ignoring broadcast command from myself')
+        return
 
-    points = payload[4:]
+    maxVelocity = int(payload[1])
+    pivotTurnSpeed = int(payload[2])
+    optionByte1 = int(payload[3])
+    optionByte2 = int(payload[4])
+    piOptionByte1 = int(payload[5])
+
+    if piOptionByte1 & PI_OPTION_FOLLOW_ME_MODE:
+        globals.followMe = True
+    else:
+        globals.followMe = False
+
+    globals.followMeWaypoints = []
+    globals.followMeMaxVelocity = maxVelocity
+    globals.followMePivotTurnSpeed = pivotTurnSpeed
+
+    points = payload[6:]
     waypoints = []
 
     if len(points) % 2 != 0:
@@ -32,7 +49,7 @@ def botLabCallback(data):
         waypoint = (int(points[i*2]), int(points[(i*2)+1]))
         waypoints.append(waypoint)
 
-    msg = ('Transit between %d waypoints [maxVelocity: %d, pivotSpeed: %d, opt1: %2X, opt2: %2X]' % (waypointCount, maxVelocity, pivotTurnSpeed, optionByte1, optionByte2))
+    msg = ('Transit between %d waypoints [maxVelocity: %d, pivotSpeed: %d, opt1: %2X, opt2: %2X, piOpt1: %2X]' % (waypointCount, maxVelocity, pivotTurnSpeed, optionByte1, optionByte2, piOptionByte1))
     print(msg)
     udp.logToBotlab(msg, False)
 

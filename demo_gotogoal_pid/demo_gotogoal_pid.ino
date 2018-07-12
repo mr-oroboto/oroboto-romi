@@ -51,8 +51,11 @@
 #define I2C_WAYPOINT_SIZE 4                     // 2 bytes each (signed short) for x and y co-ordinates 
 #define I2C_WAYPOINTS_PER_SEGMENT 2             // number of waypoints that can be sent per segment for I2C_CMD_GETWAYPOINTS (don't exceed 16 byte max segment size)
 
-#define I2C_SNAPSHOT_SIZE 10                    // 2 bytes (signed short) for x, y, 2 bytes for heading, 2 bytes (unsigned short) for distance, 2 bytes (unsigned short) for timestamp
-#define I2C_SNAPSHOTS_PER_SEGMENT 1             // number of snapshots that can be sent per segment for I2C_CMD_REPORTSNAPSHOTS (don't exceed 16 byte max segment size)
+#define I2C_SNAPSHOT_SIZE 11                      // 2 bytes (signed short) for x, y, 2 bytes for heading, 2 bytes (unsigned short) for distance, 2 bytes (unsigned short) for timestamp, 1 byte for extra detail (ie. aborted due to obstacle)
+#define I2C_SNAPSHOTS_PER_SEGMENT 1               // number of snapshots that can be sent per segment for I2C_CMD_REPORTSNAPSHOTS (don't exceed 16 byte max segment size)
+#define I2C_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_JOURNEY 0x01      // reported on the last snapshot of the last waypoint as long as that waypoint was not interrupted by an obstacle: if we never reach the last waypoint this will never be sent
+#define I2C_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_WAYPOINT 0x02     // reported on the last snapshot of every waypoint or obstacle avoidance maneuver
+#define I2C_SNAPSHOT_DETAILBYTE_ABORTED_WAYPOINT  0x04              // reported on the last snapshot if the current waypoint or obstacle avoidance maneuver itself was aborted due to an obstacle
 
 #define I2C_MARKER_SEGMENT_START 0xA0
 #define I2C_MARKER_SEGMENT_END 0xA1
@@ -73,7 +76,7 @@
 #define ADC_LSB_PER_VOLT 1023 / VCC               // 1023 / 5.0
 #define CLOSE_PROXIMITY_THRESHOLD 17.0
 #define MAX_CONSECUTIVE_CLOSE_PROXIMITY_READINGS 2
-#define OBSTACLE_AVOIDANCE_DISTANCE 20.0
+#define OBSTACLE_AVOIDANCE_DISTANCE 30.0
 
 struct Pose {
   double        x;
@@ -191,11 +194,11 @@ void loop()
       for (int8_t i = 0; i < waypointPayloadCurrentCount; i++)
       {
            bool abortedDueToObstacle = goToWaypoint((double)waypointPayload[(i*2)], (double)waypointPayload[(i*2)+1]);
-           reportPoseSnapshots();
+           reportPoseSnapshots(abortedDueToObstacle, i == (waypointPayloadCurrentCount - 1));
 
            if (abortedDueToObstacle)
            {
-              int attempts = 0;
+              uint8_t attempts = 0;
 
               while (attempts < 7 && abortedDueToObstacle)
               {
@@ -209,12 +212,14 @@ void loop()
                  Serial.println(report);
 #endif
 
-                 abortedDueToObstacle = goToWaypoint(avoidanceWaypointX, avoidanceWaypointY);
+                 abortedDueToObstacle = goToWaypoint(avoidanceWaypointX, avoidanceWaypointY);   
+                 reportPoseSnapshots(abortedDueToObstacle, false);    // last waypoint of journey can never be an obstacle avoidance waypoint
+
                  attempts++;
               }
 
 #ifdef __DEBUG__
-              snprintf_P(report, sizeof(report), PSTR("Collision avoidance finished %s after %d attempts"), abortedDueToObstacle ? "successfully" : "unsuccessfully", attempts);    
+              snprintf_P(report, sizeof(report), PSTR("Collision avoidance finished %s after %d attempts"), abortedDueToObstacle ? "unsuccessfully" : "successfully", attempts);    
               Serial.println(report);
 #endif
 
@@ -771,7 +776,7 @@ bool pollForWaypoints()
  *  heading (converted from double to 2 8-bit integers, the first considered signed and the second used for the floating point)
  *  distance to obstacle (converted from double to unsigned 16-bit integer)
  */
-void reportPoseSnapshots()
+void reportPoseSnapshots(bool abortedDueToObstacle, bool lastWaypointOfJourney)
 {
     // The last snapshot is always our current position
     if (poseSnapshotCount >= MAX_POSE_SNAPSHOTS)
@@ -814,6 +819,24 @@ void reportPoseSnapshots()
         snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+7] = (unsigned char)((int16_t)poseSnapshots[i].distanceToObstacle & 0xFF);
         snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+8] = (unsigned char)(poseSnapshots[i].timestamp >> 8);
         snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+9] = (unsigned char)(poseSnapshots[i].timestamp & 0xFF);
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+10] = 0;
+
+        if (i == (poseSnapshotCount - 1))
+        {
+           snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+10] |= I2C_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_WAYPOINT;
+
+           if (abortedDueToObstacle)
+           {
+              // If the waypoint was aborted due to finding an obstacle, report that on the last snapshot (as that represents 
+              // our current position and hence its distance measurement will have the best estimate for the obstacle location)
+              snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+10] |= I2C_SNAPSHOT_DETAILBYTE_ABORTED_WAYPOINT;
+           }
+           else if (lastWaypointOfJourney)
+           {
+              // This is never reported if the last waypoint can't be reached due to an obstacle
+              snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+10] |= I2C_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_JOURNEY;            
+           }
+        }
 
         if ((I2C_SNAPSHOTS_PER_SEGMENT == 1) || (i % (I2C_SNAPSHOTS_PER_SEGMENT - 1) == 0))
         {

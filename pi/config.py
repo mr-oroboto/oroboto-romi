@@ -1,4 +1,4 @@
-name = 'oroboto'
+name = 'MrToast'
 colour = 'yellow'
 
 udpBotLabPort = 50607
