@@ -1,5 +1,6 @@
 import socket
 import config
+import enums
 
 BUFSIZ = 1024
 
@@ -27,19 +28,22 @@ def listenForBotLab(listenPort, useBotLabPort, botName, botColour, callback):
         else:
             callback(data)
 
+
 def sendPong(botLabAddr, botLabPort, botName, botColour):
     if botLabAddr == '255.255.255.255':
         sendToAddr(botLabAddr, botLabPort, bytes('pong ' + botName + ' ' + botColour, 'ascii'), True)
     else:
         sendToAddr(botLabAddr, botLabPort, bytes('pong ' + botName + ' ' + botColour, 'ascii'), False)
 
+
 def sendFollowMeCommand(waypoints, maxVelocity, pivotTurnSpeed):
     waypointsMsg = ' '.join('%d %d' % tuple for tuple in waypoints)
-    commandMsg = '%s %d %d 0 0 0 ' % (config.name, maxVelocity, pivotTurnSpeed)
+    commandMsg = '%s %d %d %d 0 0 0 ' % (config.name, enums.PI_CMD_TRANSIT_WAYPOINTS, maxVelocity, pivotTurnSpeed)
     followMeCommand = commandMsg + waypointsMsg
 
     print('broadcasting follow me command [%s]' % followMeCommand)
     sendToAddr('255.255.255.255', config.udpLocalPort, bytes(followMeCommand, 'ascii'), True)
+
 
 def logToBotlab(msg, msgIsPoseSnapshot):
     """Sends a log back to botLab.

@@ -18,20 +18,45 @@ void Sound::ok()
     delay(500);  
 }
 
-void Sound::alarm(bool wait)
+void Sound::alarm(bool wait, uint8_t repetitions)
 {
-    playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
-
-    if (wait)
+    for (uint8_t i = 0; i < repetitions; i++)
     {
-        delay(FREQUENCY_DURATION);
+        playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+        if (wait)
+        {
+            delay(FREQUENCY_DURATION);
+        }
     }
 }
 
-void Sound::abortedWaypoint()
+void Sound::abortedWaypoint(uint8_t repetitions)
 {
-    playFrequency(FREQUENCY_MODE_ALARM, FREQUENCY_DURATION, FREQUENCY_VOLUME);
-    delay(FREQUENCY_DURATION);
+    for (uint8_t i = 0; i < repetitions; i++)
+    {
+        playFrequency(FREQUENCY_MODE_ABORTED_WAYPOINT, FREQUENCY_DURATION, FREQUENCY_VOLUME);
+        delay(FREQUENCY_DURATION * 2);
+    }
+}
+
+void Sound::abortedWaypointDueToObstacle()
+{
+    abortedWaypoint(4);
+}
+
+void Sound::abortedWaypointDueToDistanceIncrease()
+{
+    abortedWaypoint(3);
+}
+
+void Sound::abortedWaypointDueToStall()
+{
+    abortedWaypoint(2);
+}
+
+void Sound::failedObstacleAvoidance()
+{
+    alarm(true, 5);
 }
 
 void Sound::playFrequency(int mode, int duration, int volume)

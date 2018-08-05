@@ -3,6 +3,8 @@ import struct
 import math
 import udp
 import globals
+import enums
+import server
 
 POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_JOURNEY = 0x01
 POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_WAYPOINT = 0x02
@@ -93,16 +95,18 @@ def i2cInterrupt(id, tick):
             if b == 14:
                 x = struct.unpack_from('>h', d, 2)[0]
                 y = struct.unpack_from('>h', d, 4)[0]
-                heading = struct.unpack_from('b', d, 6)[0]
+                headingPacked = struct.unpack_from('B', d, 6)[0]
                 headingFloat = struct.unpack_from('B', d, 7)[0]
                 distanceToObstacle = struct.unpack_from('>H', d, 8)[0]
                 timestamp = struct.unpack_from('>H', d, 10)[0]
                 detailByte = struct.unpack_from('>B', d, 12)[0]
 
-                if heading >= 0:
-                    heading += (headingFloat / 100.0)
-                else:
+                if headingPacked & 0x80:
+                    heading = 0
                     heading -= (headingFloat / 100.0)
+                    heading -= (headingPacked & 0x7F)
+                else:
+                    heading = (headingPacked & 0x7F) + (headingFloat / 100.0)
 
                 # If ranging was disabled the distance to obstacle reported will always be 0
                 if distanceToObstacle:
@@ -117,15 +121,24 @@ def i2cInterrupt(id, tick):
                 msg = ('%lu\t%d\t%d\t%.2f\t%d\t%d\t%u' % (timestamp, x, y, heading, obstacleX, obstacleY, detailByte))
                 udp.logToBotlab(msg, True)
 
-                # If this is the last snapshot of a waypoint and it wasn't interrupted by an obstacle, it's a good one to follow
-                if (detailByte & POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_WAYPOINT) and not (detailByte & POSE_SNAPSHOT_DETAILBYTE_ABORTED_WAYPOINT):
-                    print('  above snapshot is follow me candidate')
-                    waypoint = (x, y)
-                    globals.followMeWaypoints.append(waypoint)
+                globals.currentX = x
+                globals.currentY = y
+                globals.currentHeading = heading
 
-                # If the last snapshot of the last waypoint and follow me mode is on, send all good waypoints
-                if (detailByte & POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_JOURNEY) and globals.followMe:
-                    udp.sendFollowMeCommand(globals.followMeWaypoints, globals.followMeMaxVelocity, globals.followMePivotTurnSpeed)
+                if globals.currentCommand == enums.PI_CMD_TRANSIT_WAYPOINTS:
+                    # If this is the last snapshot of a waypoint and it wasn't interrupted by an obstacle, it's a good one to follow
+                    if (detailByte & POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_WAYPOINT) and not (detailByte & POSE_SNAPSHOT_DETAILBYTE_ABORTED_WAYPOINT):
+                        print('  above snapshot is follow me candidate')
+                        waypoint = (x, y)
+                        globals.followMeWaypoints.append(waypoint)
+
+                    # If the last snapshot of the last waypoint and follow me mode is on, send all good waypoints
+                    if (detailByte & POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_JOURNEY) and globals.followMe:
+                        udp.sendFollowMeCommand(globals.followMeWaypoints, globals.followMeMaxVelocity, globals.followMePivotTurnSpeed)
+                elif globals.currentCommand == enums.PI_CMD_ROTATE_AND_DRIVE:
+                    if detailByte & POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_WAYPOINT:
+                        server.executeRotateAndDrive(globals.rotateAndDrivePayload, 2)
+
 
 #           else:
 #             print("read %d bytes for snapshot report, too short!" % b)

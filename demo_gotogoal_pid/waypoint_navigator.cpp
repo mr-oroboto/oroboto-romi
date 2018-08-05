@@ -120,8 +120,7 @@ void WaypointNavigator::executeTransit(BotCmdCtx cmdCtx)
 
            if (attempts == 7 && abortedDueToObstacle)
            {
-              sound->abortedWaypoint();
-              sound->abortedWaypoint();
+              sound->failedObstacleAvoidance();
               break;   // we're blocked on all sides!
            }
            else
@@ -303,7 +302,7 @@ bool WaypointNavigator::goToWaypoint(double x, double y, BotCmdCtx cmdCtx)
 #ifdef __DEBUG__
                         Serial.println("   !!! ABORT: OBSTACLE DETECTED");      
 #endif
-                        sound->abortedWaypoint();
+                        sound->abortedWaypointDueToObstacle();
                         abortedDueToObstacle = true;               
                         break;
                     }
@@ -360,7 +359,7 @@ bool WaypointNavigator::goToWaypoint(double x, double y, BotCmdCtx cmdCtx)
 #ifdef __DEBUG__
                     Serial.println("   !!! ABORT: DISTANCE TO TARGET INCREASED");      
 #endif
-                    sound->abortedWaypoint();
+                    sound->abortedWaypointDueToDistanceIncrease();
                     break;                  
                 }
             }
@@ -441,7 +440,7 @@ bool WaypointNavigator::goToWaypoint(double x, double y, BotCmdCtx cmdCtx)
 #ifdef __DEBUG__
               Serial.println("   !!! Stalled at low speed, aborting!"); 
 #endif
-              sound->abortedWaypoint();
+              sound->abortedWaypointDueToStall();
               break;                                
            }
         }

@@ -36,7 +36,7 @@
 #define OBSTACLE_AVOIDANCE_DISTANCE 30.0
 
 #define WAYPOINT_PROXIMITY_APPROACHING 5.0      // was 10.0
-#define WAYPOINT_PROXIMITY_REACHED 2.0          // was 3.0
+#define WAYPOINT_PROXIMITY_REACHED 1.0          // known good is 2.0
 #define POST_WAYPOINT_SLEEP_MS 300              // known good sleep is 1000
 
 #endif // __DEFAULTS_H__

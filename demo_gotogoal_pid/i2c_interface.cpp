@@ -217,11 +217,11 @@ void I2CInterface::reportPoseSnapshots(int poseSnapshotCount, struct Pose* poseS
     {
         int bufferIndex = i % I2C_SNAPSHOTS_PER_SEGMENT;                     // allows for smaller snapshot reports in future
 
-        int8_t  heading = (int8_t)poseSnapshots[i].heading;
+        uint8_t heading = ((uint8_t)(fabs(poseSnapshots[i].heading)) & 0x7F) | ((poseSnapshots[i].heading < 0) ? 0x80 : 0);      // 7-bits only, MSB is sign
         uint8_t headingFloat = (poseSnapshots[i].heading >= 0) ? ((uint8_t)((int)(poseSnapshots[i].heading * 100.0) % 100)) : ((uint8_t)((int)(poseSnapshots[i].heading * -100.0) % 100));
 
 #ifdef __DEBUG__                  
-        snprintf_P(report, sizeof(report), PSTR("   Adding snapshot [%d]: (%d,%d at %d.%d) dist %d ts: %u"), i, (int16_t)poseSnapshots[i].x, (int16_t)poseSnapshots[i].y, heading, headingFloat, (uint16_t)poseSnapshots[i].distanceToObstacle, poseSnapshots[i].timestamp);      
+        snprintf_P(report, sizeof(report), PSTR("   Adding snapshot [%d]: (%d,%d at %s [%u.%u]) dist %d ts: %u"), i, (int16_t)poseSnapshots[i].x, (int16_t)poseSnapshots[i].y, ftoa(floatBuf1, poseSnapshots[i].heading), heading, headingFloat, (uint16_t)poseSnapshots[i].distanceToObstacle, poseSnapshots[i].timestamp);      
         Serial.println(report);  
 #endif
 
@@ -229,7 +229,7 @@ void I2CInterface::reportPoseSnapshots(int poseSnapshotCount, struct Pose* poseS
         snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+1] = (unsigned char)((int16_t)poseSnapshots[i].x & 0xFF);
         snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+2] = (unsigned char)((int16_t)poseSnapshots[i].y >> 8);
         snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+3] = (unsigned char)((int16_t)poseSnapshots[i].y & 0xFF);
-        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+4] = (unsigned char)heading;
+        snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+4] = (unsigned char)heading;       // 7-bits only, MSB is sign
         snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+5] = (unsigned char)headingFloat;        
         snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+6] = (unsigned char)((int16_t)poseSnapshots[i].distanceToObstacle >> 8);
         snapshotBuffer[1+(bufferIndex*I2C_SNAPSHOT_SIZE)+7] = (unsigned char)((int16_t)poseSnapshots[i].distanceToObstacle & 0xFF);

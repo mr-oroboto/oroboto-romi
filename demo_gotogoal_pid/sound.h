@@ -11,12 +11,16 @@ class Sound
   public:
     void finished();
     void ok();
-    void alarm(bool wait);
-    void abortedWaypoint();
+    void alarm(bool wait, uint8_t repetitions = 1);
+    void failedObstacleAvoidance();
+    void abortedWaypointDueToDistanceIncrease();
+    void abortedWaypointDueToStall();
+    void abortedWaypointDueToObstacle();
 
   private:
     void playFrequency(int mode, int duration, int volume);
-
+    void abortedWaypoint(uint8_t repetitions);
+    
     Romi32U4Buzzer buzzer;
 };
 
