@@ -3,6 +3,7 @@
 #include "sound.h"
 #include "gyro.h"
 #include "pose.h"
+#include "debug.h"
 
 int16_t motorCalibrationBuckets[] = {30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240};     // Motor speed range is -300 to 300 (reverse to forward)
 

@@ -1,6 +1,7 @@
 #include "pose_snapshotter.h"
 #include "ultrasonic.h"
 #include "i2c_interface.h"
+#include "debug.h"
 
 PoseSnapshotter::PoseSnapshotter(I2CInterface* i2c) : i2c(i2c)
 {
@@ -32,7 +33,7 @@ bool PoseSnapshotter::recordSnapshot(double heading, double x, double y, bool en
 
         if (enableRanging)
         {
-            distanceToObstacle = getSonarRangedDistance();
+            distanceToObstacle = ultrasonic.getSonarRangedDistance();
         }
 
         poseSnapshots[poseSnapshotCount].distanceToObstacle = distanceToObstacle;
@@ -51,7 +52,7 @@ bool PoseSnapshotter::recordSnapshot(double heading, double x, double y, bool en
 /**
  * Report the pose snapshots from the last waypoint to the Raspberry Pi.
  */
-void PoseSnapshotter::reportPoseSnapshots(Pose currentPose, bool abortedDueToObstacle, bool lastWaypointOfJourney)
+void PoseSnapshotter::reportPoseSnapshots(Pose currentPose, bool enableRanging, bool abortedDueToObstacle, bool lastWaypointOfJourney)
 {
     // The last snapshot is always our current position
     if (poseSnapshotCount >= MAX_POSE_SNAPSHOTS)
@@ -59,7 +60,7 @@ void PoseSnapshotter::reportPoseSnapshots(Pose currentPose, bool abortedDueToObs
         poseSnapshotCount--;
     }
 
-    recordSnapshot(currentPose.heading, currentPose.x, currentPose.y, false, NULL);
+    recordSnapshot(currentPose.heading, currentPose.x, currentPose.y, enableRanging, NULL);
 
 #ifdef __DEBUG__            
     snprintf_P(report, sizeof(report), PSTR("Reporting %d pose snapshots:"), poseSnapshotCount);      

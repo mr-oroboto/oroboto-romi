@@ -3,9 +3,8 @@
 #define FREQUENCY_MODE_ABORTED_WAYPOINT 800
 #define FREQUENCY_MODE_ALARM 200
 
-//Sound::Sound()
-//{
-//}
+const char soundFinished[] PROGMEM = "! L16 V8 cdefgab>cbagfedc";
+const char soundOk[] PROGMEM = "v10>>g16>>>c16";
 
 void Sound::finished()
 {

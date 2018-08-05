@@ -1,6 +1,11 @@
+#include <Romi32U4.h>
+
 #include "debug.h"
 
 #ifdef __DEBUG__
+
+char report[80];
+char floatBuf1[16], floatBuf2[16], floatBuf3[16], floatBuf4[16], floatBuf5[16];
 
 /**
  * Helper to print doubles

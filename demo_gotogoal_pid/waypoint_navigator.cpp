@@ -6,6 +6,7 @@
 #include "gyro.h"
 #include "pose_snapshotter.h"
 #include "defaults.h"
+#include "debug.h"
 
 WaypointNavigator::WaypointNavigator(Sound* sound, Motors* motors, Gyro* gyro, PoseSnapshotter* poseSnapshotter) : sound(sound), motors(motors), gyro(gyro), poseSnapshotter(poseSnapshotter)
 {
@@ -88,7 +89,7 @@ void WaypointNavigator::executeTransit(BotCmdCtx cmdCtx)
     {
         bool abortedDueToObstacle = goToWaypoint((double)cmdCtx.waypointPayload[(i*2)], (double)cmdCtx.waypointPayload[(i*2)+1], cmdCtx);
 
-        poseSnapshotter->reportPoseSnapshots(currentPose, abortedDueToObstacle, i == (cmdCtx.waypointPayloadCount - 1));
+        poseSnapshotter->reportPoseSnapshots(currentPose, cmdCtx.enableRanging, abortedDueToObstacle, i == (cmdCtx.waypointPayloadCount - 1));
 
         if (abortedDueToObstacle)
         {
@@ -107,7 +108,7 @@ void WaypointNavigator::executeTransit(BotCmdCtx cmdCtx)
 #endif
 
               abortedDueToObstacle = goToWaypoint(avoidanceWaypointX, avoidanceWaypointY, cmdCtx);   
-              poseSnapshotter->reportPoseSnapshots(currentPose, abortedDueToObstacle, false /* last waypoint of journey can never be an obstacle avoidance waypoint */); 
+              poseSnapshotter->reportPoseSnapshots(currentPose, cmdCtx.enableRanging, abortedDueToObstacle, false /* last waypoint of journey can never be an obstacle avoidance waypoint */); 
 
               attempts++;
            }
@@ -255,7 +256,7 @@ bool WaypointNavigator::goToWaypoint(double x, double y, BotCmdCtx cmdCtx)
 #ifdef __DEBUG__
         if (USE_GYRO_FOR_HEADING)
         {
-            snprintf_P(report, sizeof(report), PSTR("head curr[%s] gyro[%s rad] ref[%s] err[%s] (raw %s)"), ftoa(floatBuf1, currentPose.heading), ftoa(floatBuf2, gyroAngleRad), ftoa(floatBuf3, referencePose.heading), ftoa(floatBuf4, headingError), ftoa(floatBuf5, headingErrorRaw));          
+            snprintf_P(report, sizeof(report), PSTR("head curr[%s] gyro[%s rad] ref[%s] err[%s] (raw %s)"), ftoa(floatBuf1, currentPose.heading), ftoa(floatBuf2, gyro->getAngleRad()), ftoa(floatBuf3, referencePose.heading), ftoa(floatBuf4, headingError), ftoa(floatBuf5, headingErrorRaw));          
         }
         else
         {
@@ -266,14 +267,7 @@ bool WaypointNavigator::goToWaypoint(double x, double y, BotCmdCtx cmdCtx)
 
         if (PIVOT_TURN && ((headingError > ((2*M_PI) / PIVOT_TURN_THRESHOLD)) || (headingError < -((2*M_PI) / PIVOT_TURN_THRESHOLD))))
         {
-            if (USE_GYRO_FOR_PIVOT_TURN)
-            {
-                gyro->correctHeadingWithPivotTurn(currentPose, headingError, cmdCtx.pivotTurnSpeed, cmdCtx.enableRanging);
-            }
-            else
-            {
-                motors->correctHeadingWithPivotTurn(headingError, cmdCtx.pivotTurnSpeed);              
-            }
+            rotate(headingError, cmdCtx.pivotTurnSpeed, cmdCtx.enableRanging);
 
             // If using gyroscope, assume we got to whatever heading it is currently measuring, rather than what we asked for
             if ( ! USE_GYRO_FOR_HEADING)
@@ -477,6 +471,37 @@ bool WaypointNavigator::goToWaypoint(double x, double y, BotCmdCtx cmdCtx)
     delay(POST_WAYPOINT_SLEEP_MS);
 
     return abortedDueToObstacle;
+}
+
+
+void WaypointNavigator::executeRotation(BotCmdCtx cmdCtx)
+{
+    ledYellow(1);
+
+    gyro->resetLastUpdateTimeToNow();
+    poseSnapshotter->resetSnapshotter();
+
+    rotate(cmdCtx.rotationRadians, cmdCtx.pivotTurnSpeed, cmdCtx.enableRanging);
+      
+    poseSnapshotter->reportPoseSnapshots(currentPose, cmdCtx.enableRanging, false /* no obstacle */, false /* rotation never be an obstacle avoidance waypoint */); 
+
+    ledYellow(0);
+}
+
+
+void WaypointNavigator::rotate(double rad, uint8_t pivotTurnSpeed, bool enableRanging)
+{
+    if (USE_GYRO_FOR_PIVOT_TURN)
+    {
+        gyro->correctHeadingWithPivotTurn(currentPose, rad, pivotTurnSpeed, enableRanging);
+    }
+    else
+    {
+        motors->correctHeadingWithPivotTurn(rad, pivotTurnSpeed);              
+    }  
+
+    currentPose.heading += rad;
+    currentPose.heading = atan2(sin(currentPose.heading), cos(currentPose.heading));
 }
 
 

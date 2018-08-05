@@ -22,6 +22,8 @@
 #define OPTION1_OVERRIDE_RESET_TO_ORIGIN  0xB1
 #define OPTION1_OVERRIDE_SET_PID_PARAMETERS 0xB2
 
+#define OPTION2_OVERRIDE_ROTATE 0xB3
+
 #define I2C_WAYPOINTS_MAX 16                    // max waypoints that can be sent per I2C_PI_CMD_GETNEXTBOTCMD
 #define I2C_WAYPOINT_SIZE 4                     // 2 bytes each (signed short) for x and y co-ordinates 
 #define I2C_WAYPOINTS_PER_SEGMENT 2             // number of waypoints that can be sent per segment for I2C_PI_CMD_GETNEXTBOTCMD (don't exceed 16 byte max segment size)
@@ -40,7 +42,8 @@ class  Sound;
  */
 enum class BotCmd 
 {
-  TransitViaWaypoints,
+  TransitViaWaypoints = 0,
+  Rotate,
   CalibrateMotors,
   ResetToOrigin,
   SetPidParameters
@@ -61,6 +64,8 @@ class BotCmdCtx
     bool    periodicReferenceHeadingReset;    
     bool    enableRanging;
     bool    abortAfterDistanceToWaypointIncreases;  
+
+    double  rotationRadians;
 
     // For BotCmd::SetPidParameters only, not command-specific
     float     pidProportional;

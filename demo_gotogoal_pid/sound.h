@@ -9,8 +9,6 @@
 class Sound
 {
   public:
-//    Sound();  
-
     void finished();
     void ok();
     void alarm(bool wait);
@@ -20,9 +18,6 @@ class Sound
     void playFrequency(int mode, int duration, int volume);
 
     Romi32U4Buzzer buzzer;
-
-    const char soundFinished[] PROGMEM = "! L16 V8 cdefgab>cbagfedc";
-    const char soundOk[] PROGMEM = "v10>>g16>>>c16";
 };
 
 #endif // __SOUND_H__

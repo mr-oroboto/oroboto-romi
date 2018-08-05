@@ -21,10 +21,14 @@ class WaypointNavigator
 
     void    resetToOrigin();
     void    setPIDParameters(float proportional, float integral, float derivative, uint16_t loopInterval);
+
     void    executeTransit(BotCmdCtx cmdCtx);
+    void    executeRotation(BotCmdCtx cmdCtx);
 
   private:
     bool    goToWaypoint(double x, double y, BotCmdCtx cmdCtx);
+    void    rotate(double rad, uint8_t pivotTurnSpeed, bool enableRanging);
+
     double  getHeading(double toX, double toY, double fromX, double fromY, double currentHeading);
     void    resetDistancesForNewWaypoint();
   

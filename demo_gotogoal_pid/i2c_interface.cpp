@@ -4,6 +4,7 @@
 #include "sound.h"
 #include "defaults.h"
 #include "pose.h"
+#include "debug.h"
 
 I2CInterface::I2CInterface(Sound* sound) : sound(sound)
 {
@@ -148,6 +149,17 @@ bool I2CInterface::pollForCommands()
               else if (optionByte1 == OPTION1_OVERRIDE_RESET_TO_ORIGIN)
               {
                  cmdCtx.cmd = BotCmd::ResetToOrigin;
+              }
+              else if (optionByte2 == OPTION2_OVERRIDE_ROTATE)
+              {
+                 cmdCtx.cmd = BotCmd::Rotate;
+
+                 // packing format: MSB (16th bit) = sign, 7 bits of integer, 8 bits of decimal point
+                 cmdCtx.rotationRadians = (uint8_t)((cmdCtx.waypointPayload[0] >> 8) & 0x7F) + ((uint8_t)(cmdCtx.waypointPayload[0] & 0xFF) / 100.0);
+                 if (cmdCtx.waypointPayload[0] & 0x8000)
+                 {
+                    cmdCtx.rotationRadians *= -1.0;
+                 }
               }
               else if (optionByte1 == OPTION1_OVERRIDE_SET_PID_PARAMETERS)
               {

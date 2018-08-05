@@ -2,6 +2,7 @@
 #include "magnetometer.h"
 #include "sound.h"
 #include "motors.h"
+#include "debug.h"
 
 #ifdef __ENABLE_MAGNETOMETER__
 
