@@ -4,7 +4,7 @@ import math
 import udp
 import globals
 import enums
-import server
+import commands
 
 POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_JOURNEY = 0x01
 POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_WAYPOINT = 0x02
@@ -137,7 +137,10 @@ def i2cInterrupt(id, tick):
                         udp.sendFollowMeCommand(globals.followMeWaypoints, globals.followMeMaxVelocity, globals.followMePivotTurnSpeed)
                 elif globals.currentCommand == enums.PI_CMD_ROTATE_AND_DRIVE:
                     if detailByte & POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_WAYPOINT:
-                        server.executeRotateAndDrive(globals.rotateAndDrivePayload, 2)
+                        commands.executeRotateAndDrive(globals.currentCommandPayload)
+                elif globals.currentCommand == enums.PI_CMD_FIND_OBJECT:
+                    if detailByte & POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_WAYPOINT:
+                        commands.executeFindObject(globals.currentCommandPayload)
 
 
 #           else:
