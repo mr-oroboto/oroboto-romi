@@ -159,7 +159,7 @@ def executeFindObject(commandPayload):
     udp.logToBotlab(msg, False)
 
     # Look for the object, there may be no need to rotate
-    (foundObject, labels) = imgrecognition.detectObjectInSnapshot(objectName)
+    (foundObject, labels) = imgrecognition.detectObjectInSnapshot(objectName, piOptionByte1 & enums.PI_OPTION_UPLOAD_SNAPSHOTS)
 
     if foundObject:
         globals.currentCommand = 0
@@ -168,6 +168,7 @@ def executeFindObject(commandPayload):
         msg = 'Found [%s]' % objectName
 
         if distance:
+            # We've been commanded to travel this far toward the object we've found
             targetX = globals.currentX + (distance * math.cos(globals.currentHeading))
             targetY = globals.currentY + (distance * math.sin(globals.currentHeading))
 
@@ -175,10 +176,14 @@ def executeFindObject(commandPayload):
             waypoint = (int(targetX), int(targetY))
             waypoints.append(waypoint)
 
-            msg = ('Found [%s], driving %d cm from (%d,%d) to (%d,%d) [maxVelocity: %d]' % (objectName, distance, globals.currentX, globals.currentY, targetX, targetY, maxVelocity))
-
-            transmitSegments = i2c.buildTransmitSegments(waypoints, maxVelocity, pivotTurnSpeed, optionByte1, optionByte2)
-            i2c.registerTransmitSegments(transmitSegments)
+            if piOptionByte1 & enums.PI_OPTION_FOLLOW_ME_MODE:
+                # Send another bot there, not me
+                msg = ('Found [%s], directing others to (%d,%d) [maxVelocity: %d, pivotSpeed: %d, optionByte1: %d]' % (objectName, targetX, targetY, maxVelocity, pivotTurnSpeed, optionByte1))
+                udp.sendFollowMeCommand(waypoints, maxVelocity, pivotTurnSpeed, optionByte1)
+            else:
+                msg = ('Found [%s], driving %d cm from (%d,%d) to (%d,%d) [maxVelocity: %d]' % (objectName, distance, globals.currentX, globals.currentY, targetX, targetY, maxVelocity))
+                transmitSegments = i2c.buildTransmitSegments(waypoints, maxVelocity, pivotTurnSpeed, optionByte1, optionByte2)
+                i2c.registerTransmitSegments(transmitSegments)
 
         print(msg)
         udp.logToBotlab(msg, False)

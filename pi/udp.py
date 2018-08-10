@@ -36,9 +36,9 @@ def sendPong(botLabAddr, botLabPort, botName, botColour):
         sendToAddr(botLabAddr, botLabPort, bytes('pong ' + botName + ' ' + botColour, 'ascii'), False)
 
 
-def sendFollowMeCommand(waypoints, maxVelocity, pivotTurnSpeed):
+def sendFollowMeCommand(waypoints, maxVelocity, pivotTurnSpeed, optionByte1):
     waypointsMsg = ' '.join('%d %d' % tuple for tuple in waypoints)
-    commandMsg = '%s %d %d %d 0 0 0 ' % (config.name, enums.PI_CMD_TRANSIT_WAYPOINTS, maxVelocity, pivotTurnSpeed)
+    commandMsg = '%s %d %d %d %d 0 0 ' % (config.name, enums.PI_CMD_TRANSIT_WAYPOINTS, maxVelocity, pivotTurnSpeed, optionByte1)
     followMeCommand = commandMsg + waypointsMsg
 
     print('broadcasting follow me command [%s]' % followMeCommand)
@@ -59,6 +59,10 @@ def logToBotlab(msg, msgIsPoseSnapshot):
     if botLabAddr:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.sendto(bytes(msg, 'ascii'), (botLabAddr, botLabPort))
+
+
+def uploadSnapshot(snapshot_file_path):
+    return
 
 
 def sendToAddr(addr, port, msg, broadcast):

@@ -1,7 +1,7 @@
-import sys
 import time
 import boto3
 import config
+import udp
 
 from PIL import Image
 from picamera import PiCamera
@@ -9,7 +9,7 @@ from picamera import PiCamera
 camera = None
 rekognitionClient = None
 
-def detectObjectInSnapshot(objectName):
+def detectObjectInSnapshot(objectName, uploadSnapshots):
     global camera
     global rekognitionClient
 
@@ -48,6 +48,9 @@ def detectObjectInSnapshot(objectName):
         MinConfidence=0.5
     )
     fd.close()
+
+    if uploadSnapshots:
+        udp.uploadSnapshot(image_name_cropped)
 
     labels = ''
 

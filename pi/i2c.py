@@ -134,7 +134,8 @@ def i2cInterrupt(id, tick):
 
                     # If the last snapshot of the last waypoint and follow me mode is on, send all good waypoints
                     if (detailByte & POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_JOURNEY) and globals.followMe:
-                        udp.sendFollowMeCommand(globals.followMeWaypoints, globals.followMeMaxVelocity, globals.followMePivotTurnSpeed)
+                        # TODO: propagate optionByte1
+                        udp.sendFollowMeCommand(globals.followMeWaypoints, globals.followMeMaxVelocity, globals.followMePivotTurnSpeed, 0)
                 elif globals.currentCommand == enums.PI_CMD_ROTATE_AND_DRIVE:
                     if detailByte & POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_WAYPOINT:
                         commands.executeRotateAndDrive(globals.currentCommandPayload)
