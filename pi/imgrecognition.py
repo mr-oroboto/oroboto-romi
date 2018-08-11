@@ -38,7 +38,7 @@ def detectObjectInSnapshot(objectName, uploadSnapshots):
     camera.capture(image_name, resize=(320,240))
 
     image = Image.open(image_name)
-    cropped = image.crop((53, 0, 267, 240))
+    cropped = image.crop((106, 0, 213, 240))
     cropped.save(image_name_cropped)
 
     fd = open(image_name_cropped, 'rb')
@@ -53,7 +53,7 @@ def detectObjectInSnapshot(objectName, uploadSnapshots):
     fd.close()
 
     if uploadSnapshots:
-        uploadSnapshot(image_name_cropped)
+        uploadSnapshot(image_name)
 
     labels = ''
 

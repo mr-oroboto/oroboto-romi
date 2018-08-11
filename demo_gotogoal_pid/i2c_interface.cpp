@@ -134,6 +134,7 @@ bool I2CInterface::pollForCommands()
           if (checksum == checksumComputed)
           {
               cmdCtx.enableRanging = (optionByte1 & OPTION1_ENABLE_RANGING);
+              cmdCtx.avoidObstacles = (optionByte1 & OPTION1_ENABLE_OBSTACLE_AVOIDANCE);
               cmdCtx.abortAfterDistanceToWaypointIncreases = (optionByte1 & OPTION1_ENABLE_ABORT_AFTER_DISTANCE_INCREASES);
               cmdCtx.capAngularVelocity = (optionByte1 & OPTION1_ENABLE_CAP_ANGULAR_VELOCITY_SIGNAL);
               cmdCtx.periodicReferenceHeadingReset = (optionByte1 & OPTION1_ENABLE_PERIODIC_REFERENCE_HEADING_RESET);

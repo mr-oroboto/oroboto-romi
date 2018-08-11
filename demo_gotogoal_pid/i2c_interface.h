@@ -18,6 +18,7 @@
 #define OPTION1_ENABLE_ABORT_AFTER_DISTANCE_INCREASES 0x02
 #define OPTION1_ENABLE_CAP_ANGULAR_VELOCITY_SIGNAL 0x04
 #define OPTION1_ENABLE_PERIODIC_REFERENCE_HEADING_RESET 0x08
+#define OPTION1_ENABLE_OBSTACLE_AVOIDANCE 0x10
 #define OPTION1_OVERRIDE_CALIBRATE_MOTORS 0xB0
 #define OPTION1_OVERRIDE_RESET_TO_ORIGIN  0xB1
 #define OPTION1_OVERRIDE_SET_PID_PARAMETERS 0xB2
@@ -63,6 +64,7 @@ class BotCmdCtx
     bool    capAngularVelocity;
     bool    periodicReferenceHeadingReset;    
     bool    enableRanging;
+    bool    avoidObstacles;
     bool    abortAfterDistanceToWaypointIncreases;  
 
     double  rotationRadians;

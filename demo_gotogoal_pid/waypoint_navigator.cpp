@@ -91,7 +91,7 @@ void WaypointNavigator::executeTransit(BotCmdCtx cmdCtx)
 
         poseSnapshotter->reportPoseSnapshots(currentPose, cmdCtx.enableRanging, abortedDueToObstacle, i == (cmdCtx.waypointPayloadCount - 1));
 
-        if (abortedDueToObstacle)
+        if (abortedDueToObstacle && cmdCtx.avoidObstacles)
         {
            uint8_t attempts = 0;
 
@@ -294,6 +294,8 @@ bool WaypointNavigator::goToWaypoint(double x, double y, BotCmdCtx cmdCtx)
             {
                 if (distanceToObstacle < CLOSE_PROXIMITY_THRESHOLD)
                 {
+                    sound->pip();
+                    
                     consecutiveCloseProximityReadings++;
 
                     if (consecutiveCloseProximityReadings >= MAX_CONSECUTIVE_CLOSE_PROXIMITY_READINGS)

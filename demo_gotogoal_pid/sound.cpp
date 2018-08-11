@@ -18,6 +18,11 @@ void Sound::ok()
     delay(500);  
 }
 
+void Sound::pip()
+{
+    playFrequency(FREQUENCY_MODE_ALARM, 100, FREQUENCY_VOLUME);
+}
+
 void Sound::alarm(bool wait, uint8_t repetitions)
 {
     for (uint8_t i = 0; i < repetitions; i++)
