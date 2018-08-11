@@ -19,7 +19,7 @@
  * Waypoint Navigation Configuration
  */
 #define MAX_VELOCITY         5                  // cm/s (slowest known good max velocity is "5")
-#define VELOCITY_ON_APPROACH 1.0
+#define VELOCITY_ON_APPROACH 60                 // was 1.0, if this is too low (ie. 1.0) we end up stalling before hitting the waypoint, and fall short of it (at WAYPOINT_PROXIMITY_APPROACHING we stall, so normally around 5.0cm short)
 
 #define CAP_ANGULAR_VELOCITY_SIGNAL true        // cap angular velocity correction allowed in PID mode
 #define ANGULAR_VELOCITY_SIGNAL_LIMIT 0.2
