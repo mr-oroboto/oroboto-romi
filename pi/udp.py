@@ -61,8 +61,10 @@ def logToBotlab(msg, msgIsPoseSnapshot):
         sock.sendto(bytes(msg, 'ascii'), (botLabAddr, botLabPort))
 
 
-def uploadSnapshot(snapshot_file_path):
-    return
+def getBotLabAddr():
+    global botLabAddr
+
+    return botLabAddr
 
 
 def sendToAddr(addr, port, msg, broadcast):

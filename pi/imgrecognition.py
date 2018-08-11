@@ -2,12 +2,15 @@ import time
 import boto3
 import config
 import udp
+import socket
+import struct
 
 from PIL import Image
 from picamera import PiCamera
 
 camera = None
 rekognitionClient = None
+imageServerSocket = None
 
 def detectObjectInSnapshot(objectName, uploadSnapshots):
     global camera
@@ -50,7 +53,7 @@ def detectObjectInSnapshot(objectName, uploadSnapshots):
     fd.close()
 
     if uploadSnapshots:
-        udp.uploadSnapshot(image_name_cropped)
+        uploadSnapshot(image_name_cropped)
 
     labels = ''
 
@@ -69,3 +72,48 @@ def objectNameMatchesLabel(objectName, label):
         return True
 
     return False
+
+
+def uploadSnapshot(snapshot_file_path):
+    global imageServerSocket
+
+    if not imageServerSocket:
+        connectToImageServer()
+
+    if not imageServerSocket:
+        print('Could not connect to ImageServer')
+        return
+
+    fd = open(snapshot_file_path, 'rb')
+    imageBytes = fd.read()
+    fd.close()
+
+    command = bytearray(struct.pack('>BBBBI', 0x42, 0x42, 0x42, 0x42, len(imageBytes)))
+    command.extend(imageBytes)
+
+    sent = 0
+    while sent < len(command):
+        try:
+            n = imageServerSocket.send(command[sent:])
+        except socket.error:
+            n = 0
+            imageServerSocket.close()
+            imageServerSocket = None
+
+        if n == 0:
+            print('Failed to write to ImageServer')
+            return
+
+        sent += n
+
+    return
+
+
+def connectToImageServer():
+    global imageServerSocket
+
+    if imageServerSocket:
+        return
+
+    imageServerSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    imageServerSocket.connect((udp.getBotLabAddr(), config.tcpBotLabImagePort))
