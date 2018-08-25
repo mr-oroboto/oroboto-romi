@@ -12,7 +12,7 @@ def botLabCallback(data):
     dataString = data.decode('ascii')
     payload = dataString.split()
 
-    if len(payload) < 8:   # name + all option bytes plus one waypoint pair
+    if len(payload) < 7:   # name + command + maxVelocity + pivotTurnSpeed + 2x bot option bytes + 1x Pi option byte
         print('Received invalid command payload: [%s]' % dataString)
         return
 
@@ -33,6 +33,8 @@ def botLabCallback(data):
         (success, errMsg) = commands.executeRotateAndDrive(payload[2:])
     elif command == enums.PI_CMD_FIND_OBJECT:
         (success, errMsg) = commands.executeFindObject(payload[2:])
+    elif command == enums.PI_CMD_CALIBRATE_CAMERA:
+        (success, errMsg) = commands.executeCalibrateCamera(payload[2:])
     else:
         errMsg = 'Unknown command'
 

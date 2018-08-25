@@ -33,6 +33,9 @@ def executeSetBotOption(commandPayload):
         msg = ('Executing bot calibration [pivotSpeed: %d]' % (pivotTurnSpeed))
     elif optionByte1 == enums.BOT_OPTION_RESET_TO_ORIGIN:
         msg = 'Reset to origin'
+        globals.currentX = 0
+        globals.currentY = 0
+        globals.currentHeading = 0
     elif optionByte1 == enums.BOT_OPTION_SET_PID_PARAMETERS:
         msg = 'Updated PID parameters'
     else:
@@ -43,6 +46,15 @@ def executeSetBotOption(commandPayload):
 
     transmitSegments = i2c.buildTransmitSegments(waypoints, maxVelocity, pivotTurnSpeed, optionByte1, optionByte2)
     i2c.registerTransmitSegments(transmitSegments)
+
+    return (True, '')
+
+
+def executeCalibrateCamera(commandPayload):
+    acceptableHueRange = int(commandPayload[0])
+    piOptionByte1 = int(commandPayload[4])
+
+    imgrecognition.calibrateCameraUntilObjectFound(acceptableHueRange, piOptionByte1 & enums.PI_OPTION_UPLOAD_SNAPSHOTS)
 
     return (True, '')
 
@@ -158,20 +170,31 @@ def executeFindObject(commandPayload):
     print(msg)
     udp.logToBotlab(msg, False)
 
+    foundObject = False
+    (targetX, targetY) = (0, 0)
+    labels = ''
+
     # Look for the object, there may be no need to rotate
-    (foundObject, labels) = imgrecognition.detectObjectInSnapshot(objectName, piOptionByte1 & enums.PI_OPTION_UPLOAD_SNAPSHOTS)
+    if objectName == 'redbox':
+        (foundObject, targetX, targetY) = imgrecognition.detectRedBox(globals.currentX, globals.currentY, globals.currentHeading, piOptionByte1 & enums.PI_OPTION_UPLOAD_SNAPSHOTS)
+    else:
+        (foundObject, labels) = imgrecognition.detectNamedObjectInSnapshot(objectName, piOptionByte1 & enums.PI_OPTION_UPLOAD_SNAPSHOTS)
+
+        if foundObject and distance:
+            # We've been commanded to travel this far toward the object we've found
+            targetX = globals.currentX + (distance * math.cos(globals.currentHeading))
+            targetY = globals.currentY + (distance * math.sin(globals.currentHeading))
 
     if foundObject:
         globals.currentCommand = 0
         globals.currentCommandPhase = 0
 
-        msg = 'Found [%s]' % objectName
+        if objectName == 'redbox':
+            msg = 'Found [redbox] at (%d, %d)' % (targetX, targetY)
+        else:
+            msg = 'Found [%s]' % objectName
 
         if distance:
-            # We've been commanded to travel this far toward the object we've found
-            targetX = globals.currentX + (distance * math.cos(globals.currentHeading))
-            targetY = globals.currentY + (distance * math.sin(globals.currentHeading))
-
             waypoints = []
             waypoint = (int(targetX), int(targetY))
             waypoints.append(waypoint)
