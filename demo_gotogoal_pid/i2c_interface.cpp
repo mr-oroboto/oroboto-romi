@@ -162,6 +162,10 @@ bool I2CInterface::pollForCommands()
                     cmdCtx.rotationRadians *= -1.0;
                  }
               }
+              else if (optionByte2 == OPTION2_OVERRIDE_REPORT_STATUS)
+              {
+                 cmdCtx.cmd = BotCmd::ReportStatus;
+              }
               else if (optionByte1 == OPTION1_OVERRIDE_SET_PID_PARAMETERS)
               {
                  cmdCtx.cmd = BotCmd::SetPidParameters;
@@ -190,6 +194,20 @@ bool I2CInterface::pollForCommands()
    }
    
    return receivedFullCommand;
+}
+
+
+/**
+ * Report bot status (currently just battery voltage)
+ */
+void I2CInterface::reportStatus()
+{
+   uint16_t mv = readBatteryMillivolts();
+   Wire.beginTransmission(I2C_PI_ADDR);
+   Wire.write(I2C_PI_CMD_REPORTSTATUS);
+   Wire.write(mv >> 8);
+   Wire.write(mv & 0xFF);
+   Wire.endTransmission();
 }
 
 

@@ -11,6 +11,7 @@ class Sound
   public:
     void finished();
     void ok();
+    void boot();
     void pip();
     void alarm(bool wait, uint8_t repetitions = 1);
     void failedObstacleAvoidance();

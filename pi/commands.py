@@ -3,8 +3,10 @@ import udp
 import globals
 import enums
 import math
-import imgrecognition
+import config
 
+if config.supportsCamera:
+    import imgrecognition
 
 def executeSetBotOption(commandPayload):
     maxVelocity = int(commandPayload[0])
@@ -45,6 +47,14 @@ def executeSetBotOption(commandPayload):
     udp.logToBotlab(msg, False)
 
     transmitSegments = i2c.buildTransmitSegments(waypoints, maxVelocity, pivotTurnSpeed, optionByte1, optionByte2)
+    i2c.registerTransmitSegments(transmitSegments)
+
+    return (True, '')
+
+
+def executeReportStatus(commandPayload):
+    waypoints = [(0,0)]
+    transmitSegments = i2c.buildTransmitSegments(waypoints, 0, 0, 0, enums.BOT_OPTION2_REPORTSTATUS)
     i2c.registerTransmitSegments(transmitSegments)
 
     return (True, '')
@@ -160,6 +170,9 @@ def executeFindObject(commandPayload):
     rotationIterations = int(commandPayload[6])
     objectName = commandPayload[7]
     distance = int(commandPayload[8])
+
+    if not config.supportsCamera:
+        return ('False', 'Camera not supported')
 
     if globals.currentCommandPhase >= rotationIterations:
         globals.currentCommand = 0

@@ -1,6 +1,9 @@
 name = 'MrToast'
 colour = 'yellow'
 
+supportsCamera = False
+supportsSonar = True
+
 udpBotLabPort = 50607
 tcpBotLabImagePort = 50609
 udpLocalPort = 50608

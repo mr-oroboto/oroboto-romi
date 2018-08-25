@@ -5,6 +5,7 @@
 
 const char soundFinished[] PROGMEM = "! L16 V8 cdefgab>cbagfedc";
 const char soundOk[] PROGMEM = "v10>>g16>>>c16";
+const char soundBoot[] PROGMEM = "v10>>a16>>e16>>a16";
 
 void Sound::finished()
 {
@@ -15,6 +16,12 @@ void Sound::finished()
 void Sound::ok()
 {
     buzzer.playFromProgramSpace(soundOk);
+    delay(500);  
+}
+
+void Sound::boot()
+{
+    buzzer.playFromProgramSpace(soundBoot);
     delay(500);  
 }
 

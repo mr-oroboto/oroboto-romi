@@ -5,6 +5,7 @@ import udp
 import globals
 import enums
 import commands
+import config
 
 POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_JOURNEY = 0x01
 POSE_SNAPSHOT_DETAILBYTE_LAST_SNAPSHOT_FOR_WAYPOINT = 0x02
@@ -90,8 +91,16 @@ def i2cInterrupt(id, tick):
             s, b, d = localPi.bsc_i2c(slaveAddr, transmitSegments[segmentsSent])
             segmentsSent += 1
 
+        elif d[0] == ord('s') and b == 3:
+            """CMD: REPORT STATUS: """
+            mv = struct.unpack_from('>H', d, 1)[0]
+
+            msg = 'Battery Level: %d mV' % mv
+            print(msg)
+            udp.sendPong('255.255.255.255', config.udpBotLabPort, mv)
+
         elif d[0] == ord('r'):
-            """CMD: REPORT: Receive the next pose snapshot report."""
+            """CMD: REPORT SNAPSHOT: Receive the next pose snapshot report."""
             if b == 14:
                 x = struct.unpack_from('>h', d, 2)[0]
                 y = struct.unpack_from('>h', d, 4)[0]

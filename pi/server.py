@@ -35,6 +35,8 @@ def botLabCallback(data):
         (success, errMsg) = commands.executeFindObject(payload[2:])
     elif command == enums.PI_CMD_CALIBRATE_CAMERA:
         (success, errMsg) = commands.executeCalibrateCamera(payload[2:])
+    elif command == enums.PI_CMD_REPORT_STATUS:
+        (success, errMsg) = commands.executeReportStatus(payload[2:])
     else:
         errMsg = 'Unknown command'
 
@@ -49,7 +51,7 @@ def botLabCallback(data):
 if __name__ == '__main__':
     i2c.registerI2CSlave(config.i2cSlaveAddr)
 
-    udp.sendPong('255.255.255.255', config.udpBotLabPort, config.name, config.colour)
+    udp.sendPong('255.255.255.255', config.udpBotLabPort, 0)
     udp.listenForBotLab(config.udpLocalPort, config.udpBotLabPort, config.name, config.colour, botLabCallback)
 
     i2c.stopI2CSlave()

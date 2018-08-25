@@ -1,6 +1,7 @@
 import socket
 import config
 import enums
+import commands
 
 BUFSIZ = 1024
 
@@ -24,16 +25,19 @@ def listenForBotLab(listenPort, useBotLabPort, botName, botColour, callback):
             botLabAddr = addr[0]
 
         if len(data) == 4 and data.decode('ascii') == 'ping':
-            sendPong(botLabAddr, botLabPort, botName, botColour)
+            sendPong(botLabAddr, botLabPort, 0)
+            commands.executeReportStatus(None)
         else:
             callback(data)
 
 
-def sendPong(botLabAddr, botLabPort, botName, botColour):
+def sendPong(botLabAddr, botLabPort, batteryMillivolts):
+    pong = bytes('pong %s %s %d %s %s' % (config.name, config.colour, batteryMillivolts, (1 if config.supportsSonar else 0), (1 if config.supportsCamera else 0)), 'ascii')
+
     if botLabAddr == '255.255.255.255':
-        sendToAddr(botLabAddr, botLabPort, bytes('pong ' + botName + ' ' + botColour, 'ascii'), True)
+        sendToAddr(botLabAddr, botLabPort, pong, True)
     else:
-        sendToAddr(botLabAddr, botLabPort, bytes('pong ' + botName + ' ' + botColour, 'ascii'), False)
+        sendToAddr(botLabAddr, botLabPort, pong, False)
 
 
 def sendFollowMeCommand(waypoints, maxVelocity, pivotTurnSpeed, optionByte1):

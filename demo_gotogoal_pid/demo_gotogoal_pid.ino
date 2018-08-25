@@ -29,6 +29,8 @@ void setup()
     Serial.begin(9600);
     Wire.begin();
 
+    sound.boot();
+
     if (USE_GYRO_FOR_HEADING || USE_GYRO_FOR_PIVOT_TURN)
     {
 #ifdef __ENABLE_MAGNETOMETER__      
@@ -75,6 +77,10 @@ void loop()
 
           case BotCmd::TransitViaWaypoints:
             waypointNavigator.executeTransit(i2c.cmdCtx);
+            break;
+
+          case BotCmd::ReportStatus:
+            i2c.reportStatus();
             break;
       }
    }
